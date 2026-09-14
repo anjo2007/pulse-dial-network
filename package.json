@@ -1,0 +1,17 @@
+{
+  "name": "pulse-dial",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": ["services/*", "apps/*"],
+  "scripts": {
+    "dev:api": "npm run dev --workspace @pulse/api",
+    "dev:portal": "npm run dev --workspace @pulse/portal",
+    "dev:mobile": "npm run start --workspace @pulse/mobile",
+    "build": "npm run build --workspace @pulse/portal",
+    "test": "npm run test --workspace @pulse/api",
+    "bootstrap:supabase": "npm run bootstrap:supabase --workspace @pulse/api",
+    "bootstrap:hospital": "npm run bootstrap:hospital --workspace @pulse/api",
+    "build:apk": "npm run build:apk --workspace @pulse/mobile"
+  }
+}

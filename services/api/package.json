@@ -1,0 +1,19 @@
+{
+  "name": "@pulse/api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test",
+    "bootstrap:hospital": "node scripts/create-hospital-user.js",
+    "bootstrap:supabase": "node scripts/init-supabase.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "cors": "^2.8.5",
+    "express-async-errors": "^3.1.1",
+    "express": "^4.21.2"
+  }
+}

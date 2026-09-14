@@ -1,0 +1,8 @@
+{
+  "expo": {
+    "name": "Pulse Dial Donor", "slug": "pulse-dial-donor", "version": "1.0.0", "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": [["expo-location", { "locationWhenInUsePermission": "Pulse Dial uses your location only to match you with nearby emergency blood requests." }]],
+    "android": { "package": "com.pulsedial.donor", "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"] }
+  }
+}

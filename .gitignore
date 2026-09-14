@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.expo/
+.env
+*.log
+.gradle/
+build/
+android/app/build/
+apps/mobile/android/app/build/
+apps/mobile/android/.gradle/
+*.apk
