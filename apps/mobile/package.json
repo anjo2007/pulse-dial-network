@@ -7,6 +7,7 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "build": "node -e \"console.log('@pulse/mobile: ready')\"",
     "build:apk": "node scripts/build-apk.js"
   },
   "dependencies": {

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
+    "build": "node -e \"console.log('@pulse/api: ready')\"",
     "test": "node --test",
     "bootstrap:hospital": "node scripts/create-hospital-user.js",
     "bootstrap:supabase": "node scripts/init-supabase.js"
