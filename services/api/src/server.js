@@ -79,8 +79,15 @@ async function loadState() {
     }
     throw new Error(`Supabase could not load application state: ${error.message}`);
   }
-  if (data?.state) ({ donors, requests, assignments } = data.state);
-  else {
+  if (data?.state) {
+    if (Array.isArray(data.state.donors) && data.state.donors.length > 0) {
+      donors = data.state.donors;
+    } else {
+      await supabase.from('app_state').upsert({ id: 'primary', state: { donors, requests, assignments } });
+    }
+    if (Array.isArray(data.state.requests)) requests = data.state.requests;
+    if (Array.isArray(data.state.assignments)) assignments = data.state.assignments;
+  } else {
     const { error: insertError } = await supabase.from('app_state').upsert({ id: 'primary', state: { donors, requests, assignments } });
     if (insertError) throw new Error(`Supabase could not initialize application state: ${insertError.message}`);
   }
