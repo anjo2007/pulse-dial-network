@@ -1,10 +1,9 @@
 {
-  "installCommand": "npm install --workspace @pulse/api --workspace @pulse/portal --no-audit --no-fund",
-  "buildCommand": "npm run build --workspace @pulse/portal",
+  "version": 2,
+  "buildCommand": "npm run build",
   "outputDirectory": "apps/portal/dist",
   "rewrites": [
-    { "source": "/api", "destination": "/api/index" },
-    { "source": "/api/(.*)", "destination": "/api/[...path]" },
-    { "source": "/((?!api).*)", "destination": "/index.html" }
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/((?!api/|api$).*)", "destination": "/index.html" }
   ]
 }

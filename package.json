@@ -13,5 +13,11 @@
     "bootstrap:supabase": "npm run bootstrap:supabase --workspace @pulse/api",
     "bootstrap:hospital": "npm run bootstrap:hospital --workspace @pulse/api",
     "build:apk": "npm run build:apk --workspace @pulse/mobile"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "express-async-errors": "^3.1.1"
   }
 }
