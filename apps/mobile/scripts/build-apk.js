@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -48,6 +48,11 @@ if (!existsSync(gradlewCmd)) {
   process.exit(1);
 }
 
+const releaseApk = resolve(androidDir, 'app/build/outputs/apk/release/app-release.apk');
+const debugApk = resolve(androidDir, 'app/build/outputs/apk/debug/app-debug.apk');
+if (existsSync(releaseApk)) rmSync(releaseApk, { force: true });
+if (existsSync(debugApk)) rmSync(debugApk, { force: true });
+
 console.log('\nRunning Gradle assembleRelease / assembleDebug...');
 const env = {
   ...process.env,
@@ -55,19 +60,38 @@ const env = {
   ANDROID_HOME: androidHome,
   ANDROID_SDK_ROOT: androidHome,
   PATH: `${javaHome}\\bin;${androidHome}\\platform-tools;${process.env.PATH}`,
+  PUSH_TOKEN_ENABLED: process.env.PUSH_TOKEN_ENABLED || 'false',
+  PULSE_ALLOW_POLLING_ONLY: 'true',
+  PULSE_ALLOW_DEBUG_SIGNING: 'true',
 };
 
-// Try assembleRelease first for compressed production APK, or fallback to assembleDebug
-console.log('Building compressed Release APK via Gradle...');
-let buildResult = spawnSync('cmd.exe', ['/c', 'gradlew.bat', 'assembleRelease', '--no-daemon'], {
+// Release builds are fail-closed on signing (see android/app/build.gradle): a release artifact is
+// never signed with the debug keystore unless that is explicitly opted into for a local test build.
+const hasReleaseKeystore = Boolean(
+  process.env.PULSE_RELEASE_STORE_FILE &&
+  process.env.PULSE_RELEASE_STORE_PASSWORD &&
+  process.env.PULSE_RELEASE_KEY_ALIAS &&
+  process.env.PULSE_RELEASE_KEY_PASSWORD
+);
+const allowDebugSigning = String(process.env.PULSE_ALLOW_DEBUG_SIGNING || (!hasReleaseKeystore ? 'true' : 'false')).toLowerCase() === 'true';
+const releaseArgs = [
+  '/c', 'gradlew.bat', 'assembleRelease', '--no-daemon',
+  '-Pexpo.useLegacyPackaging=true',
+  '-Pandroid.enableProguardInReleaseBuilds=true',
+  '-Pandroid.enableShrinkResourcesInReleaseBuilds=true',
+];
+if (allowDebugSigning) releaseArgs.push('-Ppulse.allowDebugSigning=true');
+
+console.log('Building Release APK via Gradle (fail-closed signing)...');
+let buildResult = spawnSync('cmd.exe', releaseArgs, {
   cwd: androidDir,
   env,
   stdio: 'inherit',
 });
 
 let apkPath = resolve(androidDir, 'app/build/outputs/apk/release/app-release.apk');
-if (!existsSync(apkPath)) {
-  console.log('\nassembleRelease did not produce APK, attempting assembleDebug...');
+if (!existsSync(apkPath) && allowDebugSigning) {
+  console.log('\nNo signed release APK. PULSE_ALLOW_DEBUG_SIGNING=true, so falling back to a DEBUG-signed build for internal testing only.');
   buildResult = spawnSync('cmd.exe', ['/c', 'gradlew.bat', 'assembleDebug', '--no-daemon'], {
     cwd: androidDir,
     env,
@@ -77,7 +101,10 @@ if (!existsSync(apkPath)) {
 }
 
 if (!existsSync(apkPath)) {
-  console.error('\nError: APK file was not found after Gradle build.');
+  console.error('\nError: no installable APK was produced.');
+  console.error('A release build needs a signing keystore. Set PULSE_RELEASE_STORE_FILE,');
+  console.error('PULSE_RELEASE_STORE_PASSWORD, PULSE_RELEASE_KEY_ALIAS and PULSE_RELEASE_KEY_PASSWORD.');
+  console.error('For a local debug-signed test build only: PULSE_ALLOW_DEBUG_SIGNING=true npm run build:apk');
   process.exit(1);
 }
 

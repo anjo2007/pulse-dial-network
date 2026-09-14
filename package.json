@@ -4,20 +4,29 @@
   "version": "1.0.0",
   "type": "module",
   "workspaces": ["services/*", "apps/*"],
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev:api": "npm run dev --workspace @pulse/api",
     "dev:portal": "npm run dev --workspace @pulse/portal",
     "dev:mobile": "npm run start --workspace @pulse/mobile",
-    "build": "npm run build --workspace @pulse/portal",
-    "test": "npm run test --workspace @pulse/api",
+    "build": "node --check api/index.js && node --check services/api/src/app.js && npm run build --workspace @pulse/portal",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "playwright test",
+    "check:mobile": "npm run check --workspace @pulse/mobile",
+    "verify": "npm test && npm run build && npm run check:mobile && npm run test:e2e",
     "bootstrap:supabase": "npm run bootstrap:supabase --workspace @pulse/api",
     "bootstrap:hospital": "npm run bootstrap:hospital --workspace @pulse/api",
     "build:apk": "npm run build:apk --workspace @pulse/mobile"
   },
-  "dependencies": {
-    "@supabase/supabase-js": "^2.49.1",
-    "cors": "^2.8.5",
-    "express": "^4.21.2",
-    "express-async-errors": "^3.1.1"
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "^0.8.15",
+    "postcss": "^8.5.28",
+    "qs": "^6.16.0",
+    "tar": "^7.5.22"
   }
 }

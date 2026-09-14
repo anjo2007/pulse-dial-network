@@ -80,6 +80,25 @@ def enableProguardInReleaseBuilds = (findProperty('android.enableProguardInRelea
  */
 def jscFlavor = 'org.webkit:android-jsc:+'
 
+/*
+ * Release signing is fail-closed.
+ *
+ * A release build must never be silently signed with the debug keystore: that produces an
+ * artifact that looks shippable but is signed with a publicly known key. Supply a real keystore
+ * through gradle properties (-Ppulse.release.*) or the environment (PULSE_RELEASE_*), or opt in
+ * explicitly to a local debug-signed build with PULSE_ALLOW_DEBUG_SIGNING=true.
+ */
+def pulseReleaseStoreFile = findProperty('pulse.release.storeFile') ?: System.getenv('PULSE_RELEASE_STORE_FILE') ?: ''
+def pulseReleaseStorePassword = findProperty('pulse.release.storePassword') ?: System.getenv('PULSE_RELEASE_STORE_PASSWORD') ?: ''
+def pulseReleaseKeyAlias = findProperty('pulse.release.keyAlias') ?: System.getenv('PULSE_RELEASE_KEY_ALIAS') ?: ''
+def pulseReleaseKeyPassword = findProperty('pulse.release.keyPassword') ?: System.getenv('PULSE_RELEASE_KEY_PASSWORD') ?: ''
+def hasReleaseKeystore = pulseReleaseStoreFile
+    && file(pulseReleaseStoreFile).exists()
+    && pulseReleaseStorePassword
+    && pulseReleaseKeyAlias
+    && pulseReleaseKeyPassword
+def allowDebugSigning = (findProperty('pulse.allowDebugSigning') ?: System.getenv('PULSE_ALLOW_DEBUG_SIGNING') ?: 'false').toString().toBoolean()
+
 android {
     ndkVersion rootProject.ext.ndkVersion
 
@@ -101,15 +120,27 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(pulseReleaseStoreFile)
+                storePassword pulseReleaseStorePassword
+                keyAlias pulseReleaseKeyAlias
+                keyPassword pulseReleaseKeyPassword
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            } else if (allowDebugSigning) {
+                signingConfig signingConfigs.debug
+                logger.warn('Pulse Dial: release build is signed with the DEBUG keystore because PULSE_ALLOW_DEBUG_SIGNING=true. Internal testing only - never distribute this artifact.')
+            }
+            // Otherwise no signing config is applied and the guard task below fails the build.
             shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
@@ -123,6 +154,22 @@ android {
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
+
+// Fail-closed guard: refuse to produce a release artifact with no real signing configuration.
+tasks.whenTaskAdded { task ->
+    if (task.name == 'assembleRelease' || task.name == 'bundleRelease' || task.name == 'packageRelease') {
+        task.doFirst {
+            if (!hasReleaseKeystore && !allowDebugSigning) {
+                throw new GradleException(
+                    'Pulse Dial: release builds require a signing keystore. Set PULSE_RELEASE_STORE_FILE, '
+                    + 'PULSE_RELEASE_STORE_PASSWORD, PULSE_RELEASE_KEY_ALIAS and PULSE_RELEASE_KEY_PASSWORD '
+                    + '(or -Ppulse.release.*). For a local debug-signed test build only, set '
+                    + 'PULSE_ALLOW_DEBUG_SIGNING=true explicitly.'
+                )
+            }
+        }
     }
 }
 

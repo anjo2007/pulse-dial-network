@@ -1,12 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { app } from '../src/server.js';
 
+let app;
 let server;
 let baseUrl;
 
 test.before(async () => {
+  // This suite is the end-to-end contract baseline for the DEMO environment. Demo fixtures and the
+  // fixed development OTP are explicit opt-in, so the environment is declared here BEFORE the app
+  // is imported, because configuration is snapshotted at import time.
+  process.env.NODE_ENV = 'test';
+  process.env.DEMO_MODE = 'true';
+  ({ app } = await import('../src/server.js'));
   await new Promise((resolve) => {
     server = http.createServer(app);
     server.listen(0, '127.0.0.1', () => {

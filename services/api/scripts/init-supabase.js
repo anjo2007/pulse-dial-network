@@ -1,110 +1,156 @@
-import { existsSync } from 'node:fs';
+#!/usr/bin/env node
+// Pulse Dial - Supabase schema CHECKER (read-only, always).
+//
+// This script never applies DDL. An automated migrator that runs arbitrary SQL against a live
+// project from CI or a developer laptop is a foot-gun: it cannot ask for confirmation, it hides
+// failures behind a retry, and it may run a destructive statement twice. Instead this script:
+//   1. verifies EVERY migration artifact against the live project (not just the first one),
+//   2. prints the exact files to run and the manual verification queries.
+//
+//   node scripts/init-supabase.js
+//
+// Apply migrations by pasting them into the Supabase SQL editor (or a reviewed migration step):
+//   001_app_state.sql                  app_state table
+//   002_app_state_version.sql          app_state.version + RLS
+//   003_realtime_private_broadcast.sql private realtime topics + broadcast trigger
+//   004_rate_limit.sql                 rate_limit_hit() - REQUIRED, the API fails closed without it
+import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
+import { fail, loadLocalEnv, mask } from './lib/cli.js';
 
-// Automatically load .env if present
-if (typeof process.loadEnvFile === 'function') {
-  const candidatePaths = [
-    resolve(process.cwd(), '.env'),
-    resolve(process.cwd(), '../../.env'),
-    resolve(import.meta.dirname, '../../.env'),
-    resolve(import.meta.dirname, '../.env'),
-  ];
-  for (const envPath of candidatePaths) {
-    if (existsSync(envPath)) {
-      try { process.loadEnvFile(envPath); break; } catch (_) {}
-    }
+// Resolve the migrations directory by walking up from this file until it is found. Deriving it from
+// a fixed "../../../" hop was fragile: one directory off and the checker inspected a non-existent
+// path (and therefore reported everything as missing).
+function findMigrationsDir(startDir = import.meta.dirname) {
+  let dir = startDir;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const candidate = resolve(dir, 'supabase', 'migrations');
+    if (existsSync(candidate)) return candidate;
+    const parent = resolve(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
   }
+  return null;
 }
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
-const HOSPITAL_EMAIL = process.env.HOSPITAL_EMAIL || 'admin@centralhospital.demo';
-const HOSPITAL_PASSWORD = process.env.HOSPITAL_PASSWORD || 'demo123';
+const MANUAL_POLICY_QUERY = "select policyname from pg_policies where schemaname = 'realtime' and tablename = 'messages';";
 
 async function main() {
-  console.log('=== Pulse Dial Supabase Initializer & Health Check ===\n');
+  console.log('='.repeat(72));
+  console.log('Pulse Dial - Supabase schema check (READ-ONLY: nothing is written)');
+  console.log('='.repeat(72));
 
-  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
-    console.error('Error: Missing Supabase credentials in environment.');
-    console.error('Please configure SUPABASE_URL and SUPABASE_SECRET_KEY in your .env file or environment variables.\n');
-    process.exitCode = 1;
-    return;
-  }
+  const envPath = loadLocalEnv();
+  if (envPath) console.log(`Local env loaded from ${envPath}`);
 
-  console.log(`Connecting to Supabase at: ${SUPABASE_URL}`);
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) fail('SUPABASE_URL and SUPABASE_SECRET_KEY must be set in the environment.');
+
+  const migrationsDir = findMigrationsDir();
+  if (!migrationsDir) fail('Could not locate supabase/migrations from this script location.');
+  const migrations = readdirSync(migrationsDir).filter(file => file.endsWith('.sql')).sort();
+
+  console.log(`Project: ${url}`);
+  console.log(`Service key: ${mask(key)}`);
+  console.log(`Migrations on disk (${migrationsDir}):\n  ${migrations.join('\n  ')}\n`);
+
+  const supabase = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
 
+  const results = [];
+
+  // --- 001 + 002: state row and its optimistic-concurrency column -------------------------------
+  let stateRow = null;
   try {
-    console.log('1. Checking database connection and public.app_state table...');
-    const { data, error } = await supabase.from('app_state').select('id, updated_at').eq('id', 'primary').maybeSingle();
-
+    const { data, error } = await supabase.from('app_state').select('id, version, updated_at').eq('id', 'primary').maybeSingle();
     if (error) {
-      if (error.code === '42P01' || error.code === 'PGRST205' || (error.message && error.message.includes('schema cache'))) {
-        console.error('\nTable public.app_state was NOT found in your Supabase database.');
-        console.error('Please run the following SQL in your Supabase Dashboard SQL Editor:\n');
-        console.log('----------------------------------------------------');
-        console.log(`create table if not exists public.app_state (
-  id text primary key,
-  state jsonb not null default '{}'::jsonb,
-  updated_at timestamptz not null default now()
-);
-
-alter table public.app_state enable row level security;
-revoke all on public.app_state from anon, authenticated;`);
-        console.log('----------------------------------------------------\n');
-        process.exitCode = 1;
-        return;
-      }
-      throw error;
-    }
-
-    console.log('   ✓ public.app_state table is present and accessible.');
-    if (data) {
-      console.log(`   ✓ Found existing application state record (last updated: ${data.updated_at}).`);
-    } else {
-      console.log('   ✓ Initializing primary state record...');
-      const { error: initError } = await supabase.from('app_state').upsert({
-        id: 'primary',
-        state: { donors: [], requests: [], assignments: [] },
-        updated_at: new Date().toISOString(),
-      });
-      if (initError) throw initError;
-      console.log('   ✓ Primary state record created.');
-    }
-
-    console.log('\n2. Verifying hospital administrator authentication user...');
-    const { data: usersData, error: listError } = await supabase.auth.admin.listUsers();
-    if (listError) {
-      console.warn(`   Notice: Could not list users: ${listError.message}`);
-    } else {
-      const existing = usersData.users.find(u => u.email === HOSPITAL_EMAIL);
-      if (existing) {
-        console.log(`   ✓ Verified hospital user exists: ${existing.email} (id: ${existing.id})`);
+      if (error.code === '42P01') {
+        results.push({ artifact: 'app_state table', file: '001_app_state.sql', ok: false, detail: 'table missing' });
+      } else if (String(error.message || '').toLowerCase().includes('version')) {
+        results.push({ artifact: 'app_state table', file: '001_app_state.sql', ok: true, detail: 'table present' });
+        results.push({ artifact: 'app_state.version', file: '002_app_state_version.sql', ok: false, detail: 'column missing' });
       } else {
-        console.log(`   Creating hospital user: ${HOSPITAL_EMAIL}...`);
-        const { data: created, error: createError } = await supabase.auth.admin.createUser({
-          email: HOSPITAL_EMAIL,
-          password: HOSPITAL_PASSWORD,
-          email_confirm: true,
-          app_metadata: { role: 'hospital' },
-        });
-        if (createError) {
-          console.warn(`   Could not create hospital user automatically: ${createError.message}`);
-        } else {
-          console.log(`   ✓ Created hospital user ${created.user.id} for ${created.user.email}`);
-        }
+        fail(`Schema check failed: ${error.message}`);
       }
+    } else {
+      stateRow = data;
+      results.push({ artifact: 'app_state table', file: '001_app_state.sql', ok: true, detail: 'table present' });
+      const versionPresent = data ? data.version !== null && data.version !== undefined : true;
+      results.push({
+        artifact: 'app_state.version',
+        file: '002_app_state_version.sql',
+        ok: versionPresent,
+        detail: data ? (versionPresent ? `primary row at version ${data.version}` : 'column missing on the existing row') : 'table empty; the API seeds version 1 on first boot',
+      });
     }
-
-    console.log('\n=== Supabase configuration is fully verified and ready for global syncing! ===\n');
-  } catch (err) {
-    console.error('\nError initializing Supabase:', err.message);
-    process.exitCode = 1;
+  } catch (error) {
+    fail(`Could not reach the project: ${error.message}`);
   }
+
+  // --- 003: private realtime topics -------------------------------------------------------------
+  try {
+    const { error } = await supabase.schema('realtime').from('messages').select('id').limit(1);
+    if (error) {
+      results.push({ artifact: 'realtime.messages', file: '003_realtime_private_broadcast.sql', ok: false, detail: error.message });
+    } else {
+      results.push({
+        artifact: 'realtime.messages policy',
+        file: '003_realtime_private_broadcast.sql',
+        ok: null,
+        detail: `table reachable; confirm the private-topic policy manually: ${MANUAL_POLICY_QUERY}`,
+      });
+    }
+  } catch (error) {
+    results.push({ artifact: 'realtime.messages', file: '003_realtime_private_broadcast.sql', ok: false, detail: String(error?.message || error) });
+  }
+
+  // --- 004: read-only table probe. Never invoke rate_limit_hit: it writes counters.
+  try {
+    const { error } = await supabase.from('rate_limit_windows').select('bucket').limit(0);
+    if (error) {
+      results.push({
+        artifact: 'rate_limit_hit()',
+        file: '004_rate_limit.sql',
+        ok: false,
+        detail: error.code === 'PGRST202' ? 'function missing - authentication will fail closed (HTTP 503)' : error.message,
+      });
+    } else {
+      results.push({ artifact: 'rate_limit_hit()', file: '004_rate_limit.sql', ok: null, detail: 'Counter table exists. Confirm function/ACL manually: select to_regprocedure(\'public.rate_limit_hit(text,integer,integer)\'); No counter was incremented.' });
+    }
+  } catch (error) {
+    results.push({ artifact: 'rate_limit_hit()', file: '004_rate_limit.sql', ok: false, detail: String(error?.message || error) });
+  }
+
+  console.log('Artifact check');
+  console.log('-'.repeat(72));
+  const missing = [];
+  for (const result of results) {
+    const mark = result.ok === true ? 'OK   ' : result.ok === false ? 'MISS ' : 'CHECK';
+    console.log(`${mark} ${result.artifact.padEnd(26)} ${result.file}${result.detail ? `\n      ${result.detail}` : ''}`);
+    if (result.ok === false) missing.push(result);
+  }
+
+  if (missing.length === 0) {
+    console.log('-'.repeat(72));
+    console.log('\nAll automatically verifiable artifacts are present.');
+    console.log('If realtime signals are needed, confirm the 003 policy with the query shown above.');
+    console.log('Next: node scripts/create-hospital-user.js --email <operator email> --hospital-id <tenant id>');
+    return;
+  }
+
+  console.log('-'.repeat(72));
+  console.log(`\n${missing.length} artifact(s) missing. Apply these files in the Supabase SQL editor, in order:`);
+  for (const file of migrations) {
+    console.log(`  ${resolve(migrationsDir, file)}`);
+  }
+  console.log('\nThen re-run this checker. Do not point the API at an unmigrated project:');
+  console.log('  * 004 missing  -> credential endpoints answer 503 (fail closed)');
+  console.log('  * 002 missing  -> state writes cannot be fenced, the API reports unhealthy');
+  if (stateRow) console.log(`\nCurrent state row: version=${stateRow.version ?? '(none)'} updated_at=${stateRow.updated_at ?? '(none)'}`);
+  process.exitCode = 1;
 }
 
-main();
+main().catch(error => fail(error?.message || String(error)));

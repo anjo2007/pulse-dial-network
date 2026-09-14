@@ -2,6 +2,18 @@ node_modules/
 dist/
 .expo/
 .env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+.vercel/
+playwright-report/
+test-results/
+*.keystore
+*.jks
+**/google-services.json
+**/GoogleService-Info.plist
 *.log
 .gradle/
 build/
@@ -9,3 +21,6 @@ android/app/build/
 apps/mobile/android/app/build/
 apps/mobile/android/.gradle/
 *.apk
+node-compile-cache/
+**/node-compile-cache/
+**/.temp/

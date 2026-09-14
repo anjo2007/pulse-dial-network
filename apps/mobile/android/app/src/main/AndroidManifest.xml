@@ -2,10 +2,15 @@
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
   <uses-permission android:name="android.permission.INTERNET"/>
-  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <!-- Required on Android 13+ (API 33) for any notification, including high-priority alerts.
+       expo-notifications also declares it; kept explicit so the requirement is visible here. -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
-  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <!-- Intentionally NOT requested:
+       - SYSTEM_ALERT_WINDOW: the app never draws over other apps.
+       - READ/WRITE_EXTERNAL_STORAGE: no external storage is used.
+       - USE_FULL_SCREEN_INTENT: reserved by Android 14+/Play policy for calling and alarm apps;
+         Pulse Dial must not impersonate either, so alerts stay standard heads-up notifications. -->
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
@@ -13,7 +18,7 @@
       <data android:scheme="https"/>
     </intent>
   </queries>
-  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true">
+  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:fullBackupContent="@xml/secure_store_backup_rules" android:dataExtractionRules="@xml/secure_store_data_extraction_rules" android:theme="@style/AppTheme" android:supportsRtl="true">
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
@@ -27,6 +32,14 @@
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="com.pulsedial.donor"/>
+      </intent-filter>
+      <!-- Deep links used by alert notifications and taps from the app scheme. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="pulsedial" android:host="alert"/>
+        <data android:scheme="pulsedial" android:host="alerts"/>
       </intent-filter>
     </activity>
   </application>
