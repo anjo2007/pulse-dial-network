@@ -171,11 +171,23 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
 
   await setDoc(doc(db, 'emergency_requests', id), data);
 
+const COMPATIBLE_DONORS = {
+  'O-': ['O-'],
+  'O+': ['O-', 'O+'],
+  'A-': ['O-', 'A-'],
+  'A+': ['O-', 'O+', 'A-', 'A+'],
+  'B-': ['O-', 'B-'],
+  'B+': ['O-', 'O+', 'B-', 'B+'],
+  'AB-': ['O-', 'A-', 'B-', 'AB-'],
+  'AB+': ['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'],
+};
+
   // Auto-match nearby available donors
   try {
     const donorsRef = collection(db, 'donors');
     const donorsSnap = await getDocs(donorsRef);
     let matched = 0;
+    const compatibleList = COMPATIBLE_DONORS[bloodType] || [bloodType, 'O-'];
 
     for (const donorDoc of donorsSnap.docs) {
       const donor = donorDoc.data();
@@ -184,7 +196,7 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
       const isAvail = donor.is_available ?? donor.isAvailable ?? true;
       if (!isAvail) continue;
 
-      if (dBlood === bloodType || dBlood === 'O-') {
+      if (compatibleList.includes(dBlood)) {
         const asgnId = 'asgn_' + id + '_' + donorId;
         const arrivalOtp = String(Math.floor(100000 + Math.random() * 900000));
         const asgnData = {
@@ -212,6 +224,92 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
   }
 
   return data;
+}
+
+/**
+ * End / Close emergency request directly in Firestore.
+ */
+export async function closeEmergencyRequestDoc(requestId) {
+  const reqRef = doc(db, 'emergency_requests', requestId);
+  const snap = await getDoc(reqRef);
+  if (!snap.exists()) {
+    throw new Error('Emergency request not found.');
+  }
+  const data = snap.data();
+  const isFulfilled = (data.units_collected || 0) >= (data.units_required || 1);
+  const nextStatus = isFulfilled ? 'FULFILLED' : 'CLOSED';
+  await updateDoc(reqRef, {
+    status: nextStatus,
+    closed_at: new Date().toISOString()
+  });
+
+  return {
+    id: requestId,
+    bloodType: data.blood_type,
+    unitsNeeded: data.units_required || 1,
+    urgency: data.urgency || 'CRITICAL',
+    status: nextStatus,
+    currentRadiusKm: data.current_radius_km || 1,
+    createdAt: data.created_at,
+    assignments: []
+  };
+}
+
+/**
+ * Expand dispatch perimeter in Firestore.
+ */
+export async function escalateEmergencyRequestDoc(requestId) {
+  const reqRef = doc(db, 'emergency_requests', requestId);
+  const snap = await getDoc(reqRef);
+  if (!snap.exists()) {
+    throw new Error('Emergency request not found.');
+  }
+  const data = snap.data();
+  const current = Number(data.current_radius_km || 1);
+  const nextRadius = current < 5 ? 5 : (current < 15 ? 15 : current + 5);
+  await updateDoc(reqRef, {
+    current_radius_km: nextRadius,
+    current_tier: (data.current_tier || 1) + 1,
+    escalated_at: new Date().toISOString()
+  });
+
+  return {
+    id: requestId,
+    bloodType: data.blood_type,
+    unitsNeeded: data.units_required || 1,
+    urgency: data.urgency || 'CRITICAL',
+    status: data.status || 'ACTIVE',
+    currentRadiusKm: nextRadius,
+    createdAt: data.created_at,
+    assignments: []
+  };
+}
+
+/**
+ * Cancel emergency request directly in Firestore.
+ */
+export async function cancelEmergencyRequestDoc(requestId) {
+  const reqRef = doc(db, 'emergency_requests', requestId);
+  const snap = await getDoc(reqRef);
+  if (!snap.exists()) {
+    throw new Error('Emergency request not found.');
+  }
+  const data = snap.data();
+  await updateDoc(reqRef, {
+    status: 'CANCELLED',
+    cancelled_at: new Date().toISOString()
+  });
+
+  return {
+    id: requestId,
+    bloodType: data.blood_type,
+    unitsNeeded: data.units_required || 1,
+    urgency: data.urgency || 'CRITICAL',
+    status: 'CANCELLED',
+    currentRadiusKm: data.current_radius_km || 1,
+    createdAt: data.created_at,
+    assignments: []
+  };
 }
 
 /**

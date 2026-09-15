@@ -14,7 +14,7 @@ import { isUnauthorizedError } from '../lib/api.js';
 import { POLL_STATUS } from '../lib/poller.js';
 import { filterRequests, mergeRequestUpdate, normalizeRequest, sortRequests, summarize } from '../lib/lifecycle.js';
 import { formatRemaining, sessionRemainingMs } from '../lib/session.js';
-import { createEmergencyRequestDoc, checkInDonorDesk } from '../lib/firebase.js';
+import { createEmergencyRequestDoc, checkInDonorDesk, closeEmergencyRequestDoc, escalateEmergencyRequestDoc, cancelEmergencyRequestDoc } from '../lib/firebase.js';
 
 const FEED_INTERVAL_MS = 4000;
 const FILTERS = [
@@ -128,8 +128,14 @@ export default function Dashboard({ api, session, onSignOut, onUnauthorized }) {
 
   const escalate = useCallback(
     async (id) => {
-      const updated = await guard(() => api.escalateRequest(session.token, id));
-      const normalized = normalizeRequest(updated);
+      let normalized;
+      if (session.token?.includes('.firebase')) {
+        const updated = await escalateEmergencyRequestDoc(id);
+        normalized = normalizeRequest(updated);
+      } else {
+        const updated = await guard(() => api.escalateRequest(session.token, id));
+        normalized = normalizeRequest(updated);
+      }
       if (normalized.id) feed.setRequests((previous) => previous.map((request) => (request.id === normalized.id ? normalized : request)));
       push(`Dispatch perimeter expanded to ${normalized.currentRadiusKm} km.`, { tone: 'success' });
       feed.refreshNow();
@@ -140,8 +146,14 @@ export default function Dashboard({ api, session, onSignOut, onUnauthorized }) {
 
   const closeRequest = useCallback(
     async (id) => {
-      const updated = await guard(() => api.closeRequest(session.token, id));
-      const normalized = normalizeRequest(updated);
+      let normalized;
+      if (session.token?.includes('.firebase')) {
+        const updated = await closeEmergencyRequestDoc(id);
+        normalized = normalizeRequest(updated);
+      } else {
+        const updated = await guard(() => api.closeRequest(session.token, id));
+        normalized = normalizeRequest(updated);
+      }
       if (normalized.id) feed.setRequests((previous) => previous.map((request) => (request.id === normalized.id ? normalized : request)));
       push(normalized.status === 'FULFILLED' ? 'Request fulfilled. No further donors will be alerted.' : 'Dispatch ended before all units were collected. Request marked unfulfilled.', { tone: normalized.status === 'FULFILLED' ? 'success' : 'info' });
       feed.refreshNow();
@@ -152,8 +164,14 @@ export default function Dashboard({ api, session, onSignOut, onUnauthorized }) {
 
   const cancelRequest = useCallback(
     async (id) => {
-      const updated = await guard(() => api.cancelRequest(session.token, id));
-      const normalized = normalizeRequest(updated);
+      let normalized;
+      if (session.token?.includes('.firebase')) {
+        const updated = await cancelEmergencyRequestDoc(id);
+        normalized = normalizeRequest(updated);
+      } else {
+        const updated = await guard(() => api.cancelRequest(session.token, id));
+        normalized = normalizeRequest(updated);
+      }
       if (normalized.id) {
         feed.setRequests((previous) =>
           previous.map((request) => (request.id === normalized.id ? mergeRequestUpdate(request, updated) : request)),

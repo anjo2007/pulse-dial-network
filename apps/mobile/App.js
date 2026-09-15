@@ -223,7 +223,7 @@ function DatePickerField({ label, value, onChange, placeholder = 'Select date' }
   );
 }
 
-function EditProfileModal({ visible, donor, onClose, onSave }) {
+function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
   const [name, setName] = useState(donor?.fullName || donor?.name || '');
   const [bloodType, setBloodType] = useState(donor?.bloodType || 'O-');
   const [weightKg, setWeightKg] = useState(String(donor?.weightKg || '68'));
@@ -251,7 +251,7 @@ function EditProfileModal({ visible, donor, onClose, onSave }) {
     if (!name.trim()) return Alert.alert('Required', 'Please enter your full name.');
     setSaving(true);
     try {
-      await onSave({
+      const updates = {
         fullName: name.trim(),
         bloodType,
         weightKg: Number(weightKg) || 68,
@@ -260,7 +260,12 @@ function EditProfileModal({ visible, donor, onClose, onSave }) {
         medications: medications.trim() || 'None',
         diseases: diseases.trim() || 'None',
         isAvailable,
-      });
+      };
+      if (donor?.id) {
+        await updateDonorProfile(donor.id, updates).catch((e) => console.warn('Firestore profile update error:', e));
+      }
+      if (onSave) await onSave(updates);
+      if (onSaved) await onSaved(updates);
       onClose();
     } catch (err) {
       Alert.alert('Save Failed', err.message);
