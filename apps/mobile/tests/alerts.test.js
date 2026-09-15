@@ -64,14 +64,20 @@ test('deep links are restricted to our scheme and known routes', () => {
   assert.equal(parseDeepLink(undefined), null);
 });
 
-test('capabilities never claim overlay or full-screen intent', () => {
-  for (const platform of ['android', 'ios']) {
-    const caps = describeAlertCapabilities(platform);
-    assert.equal(caps.headsUp, true);
-    assert.equal(caps.fullScreenIntent, false);
-    assert.equal(caps.overlay, false);
-    assert.equal(caps.criticalAlerts, false);
-  }
+test('capabilities reflect platform-specific incoming call and overlay support', () => {
+  const androidCaps = describeAlertCapabilities('android');
+  assert.equal(androidCaps.headsUp, true);
+  assert.equal(androidCaps.fullScreenIntent, true);
+  assert.equal(androidCaps.overlay, true);
+  assert.equal(androidCaps.inAppCallAlert, true);
+  assert.equal(androidCaps.criticalAlerts, false);
+
+  const iosCaps = describeAlertCapabilities('ios');
+  assert.equal(iosCaps.headsUp, true);
+  assert.equal(iosCaps.fullScreenIntent, false);
+  assert.equal(iosCaps.overlay, false);
+  assert.equal(iosCaps.inAppCallAlert, true);
+  assert.equal(iosCaps.criticalAlerts, false);
 });
 
 test('alerting status is permission-aware and honest about limits', () => {

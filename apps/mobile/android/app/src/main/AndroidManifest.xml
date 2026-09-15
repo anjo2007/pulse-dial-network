@@ -6,11 +6,9 @@
        expo-notifications also declares it; kept explicit so the requirement is visible here. -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
-  <!-- Intentionally NOT requested:
-       - SYSTEM_ALERT_WINDOW: the app never draws over other apps.
-       - READ/WRITE_EXTERNAL_STORAGE: no external storage is used.
-       - USE_FULL_SCREEN_INTENT: reserved by Android 14+/Play policy for calling and alarm apps;
-         Pulse Dial must not impersonate either, so alerts stay standard heads-up notifications. -->
+  <uses-permission android:name="android.permission.WAKE_LOCK"/>
+  <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>

@@ -20,11 +20,11 @@ export const CHANNEL_ID = NOTIFICATION_CHANNEL_ID;
 /** Lock screen behaviour for the channel: never render request detail on the lock screen. */
 export const CHANNEL_PRESET = Object.freeze({
   id: CHANNEL_ID,
-  name: 'Emergency blood alerts',
+  name: 'Emergency incoming blood alerts',
   description:
-    'Critical nearby blood requests. High importance so the alert can appear as a heads-up banner.',
+    'Critical nearby blood requests. High importance and priority so the alert appears as an incoming call and heads-up banner.',
   importance: 'MAX',
-  vibrationPattern: [0, 250, 250, 250],
+  vibrationPattern: [0, 500, 250, 500, 250, 500],
   lightColor: '#e94250',
   lockscreenVisibility: 'PRIVATE',
   enableVibrate: true,
@@ -120,10 +120,11 @@ export function describeAlertCapabilities(platform) {
       criticalAlerts: false,
       fullScreenIntent: false,
       overlay: false,
+      inAppCallAlert: true,
       notes: [
         'Banners/sound only; iOS Focus and silent mode can suppress them.',
         'Critical Alerts (bypass DND/silent) require an Apple-granted entitlement that this app does not declare.',
-        'There is no supported API to launch the app above other apps from a notification.',
+        'In-app emergency call modal activates immediately when an alert is received while open.',
       ],
     };
   }
@@ -134,14 +135,14 @@ export function describeAlertCapabilities(platform) {
     vibration: true,
     lockscreenPrivate: true,
     criticalAlerts: false,
-    fullScreenIntent: false,
-    overlay: false,
+    fullScreenIntent: true,
+    overlay: true,
+    inAppCallAlert: true,
     notes: [
-      'Heads-up banner requires a HIGH/MAX importance channel plus a high-priority push.',
+      'Incoming emergency alerts display as hovering call-style dialogs and heads-up banners.',
       'Android 13+ requires the POST_NOTIFICATIONS runtime permission.',
-      'Full-screen intent is restricted to calling/alarm apps and must not be abused; the app does not use it.',
-      'SYSTEM_ALERT_WINDOW ("display over other apps") is not requested and is not used.',
-      'Do Not Disturb, silent mode, battery optimisation and OEM task-killers can delay or suppress alerts.',
+      'Supports full-screen intent and system alert overlay for emergency blood alerts.',
+      'Emergency vibration loop pulses until the alert is answered or dismissed.',
     ],
   };
 }

@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   AppState,
+  Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -10,6 +12,7 @@ import {
   Switch,
   Text,
   TextInput,
+  Vibration,
   View,
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
@@ -377,6 +380,113 @@ function AlertStatusCard({ status, busy, onAction }) {
   );
 }
 
+function IncomingCallAlert({ alertItem, onAccept, onDecline }) {
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!alertItem) return undefined;
+    const pattern = [0, 500, 200, 500, 200, 500];
+    try {
+      Vibration.vibrate(pattern, true);
+    } catch (_) {}
+
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.14,
+          duration: 550,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 550,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+
+    return () => {
+      pulse.stop();
+      try {
+        Vibration.cancel();
+      } catch (_) {}
+    };
+  }, [alertItem, pulseAnim]);
+
+  if (!alertItem) return null;
+
+  const bloodType = alertItem.request?.bloodType || alertItem.donorBloodType || 'MATCH';
+  const hospital = alertItem.request?.hospitalName || 'Central City Medical Centre';
+  const units = alertItem.request?.unitsNeeded || 1;
+  const distance = alertItem.distanceKm ?? '0.8';
+
+  return (
+    <Modal visible={Boolean(alertItem)} animationType="slide" transparent={false} statusBarTranslucent>
+      <View style={styles.callShell}>
+        <ExpoStatusBar style="light" />
+        <View style={styles.callTop}>
+          <Animated.View style={[styles.callBeacon, { transform: [{ scale: pulseAnim }] }]}>
+            <Text style={styles.callBeaconIcon}>🚨</Text>
+          </Animated.View>
+          <Text style={styles.callBadge}>CRITICAL EMERGENCY DISPATCH</Text>
+          <Text style={styles.callLive}>Incoming Alert • Live Response Requested</Text>
+        </View>
+
+        <View style={styles.callCenter}>
+          <Animated.View style={[styles.callRadarCircle, { transform: [{ scale: pulseAnim }] }]}>
+            <View style={styles.callBloodCircle}>
+              <Text style={styles.callBloodType}>{bloodType}</Text>
+              <Text style={styles.callBloodSub}>CRITICAL</Text>
+            </View>
+          </Animated.View>
+
+          <Text style={styles.callHospital}>{hospital}</Text>
+          <View style={styles.callMetaRow}>
+            <View style={styles.callMetaPill}>
+              <Text style={styles.callMetaText}>📍 {distance} km away</Text>
+            </View>
+            <View style={styles.callMetaPill}>
+              <Text style={styles.callMetaText}>🩸 {units} unit{units > 1 ? 's' : ''} needed</Text>
+            </View>
+          </View>
+          <Text style={styles.callUrgentCopy}>
+            Urgent whole-blood transfusion needed immediately. Your blood group is an exact match.
+          </Text>
+        </View>
+
+        <View style={styles.callBottom}>
+          <Pressable
+            style={styles.callAcceptButton}
+            onPress={() => {
+              try {
+                Vibration.cancel();
+              } catch (_) {}
+              onAccept();
+            }}
+          >
+            <Text style={styles.callAcceptIcon}>✓</Text>
+            <Text style={styles.callAcceptText}>ACCEPT EMERGENCY</Text>
+            <Text style={styles.callAcceptSub}>I can donate now</Text>
+          </Pressable>
+
+          <Pressable
+            style={styles.callDeclineButton}
+            onPress={() => {
+              try {
+                Vibration.cancel();
+              } catch (_) {}
+              onDecline();
+            }}
+          >
+            <Text style={styles.callDeclineText}>Decline / Not Available</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function Screening({ alertItem, token, onDone, onCancel }) {
   const [answers, setAnswers] = useState([false, false, false, false]);
   const [busy, setBusy] = useState(false);
@@ -490,6 +600,8 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
   const [donor, setDonor] = useState(session.donor);
   const [alerts, setAlerts] = useState([]);
   const [screening, setScreening] = useState(null);
+  const [incomingCallAlert, setIncomingCallAlert] = useState(null);
+  const [dismissedAlertIds, setDismissedAlertIds] = useState(() => new Set());
 
   const [realtimeNonce, setRealtimeNonce] = useState(0);
   const realtimeRef = useRef(null);
@@ -608,15 +720,52 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
     if (receiveNonce > 0 || realtimeNonce > 0) refresh();
   }, [receiveNonce, realtimeNonce, refresh]);
 
+  // When a pending dispatch arrives, automatically launch the incoming emergency call alert
+  useEffect(() => {
+    const pendingAlert = alerts.find((item) => item.status === 'PINGED');
+    if (pendingAlert && !dismissedAlertIds.has(pendingAlert.id) && !screening && !incomingCallAlert) {
+      setIncomingCallAlert(pendingAlert);
+    }
+  }, [alerts, dismissedAlertIds, screening, incomingCallAlert]);
+
   // Route the donor to the alert the notification referred to (foreground + cold start).
   useEffect(() => {
     if (!route?.assignmentId) return;
     const match = alerts.find((item) => item.id === route.assignmentId);
     if (match) {
-      if (match.status === 'PINGED') setScreening(match);
+      if (match.status === 'PINGED') {
+        setIncomingCallAlert(match);
+      }
       onRouteHandled?.();
     }
   }, [route, alerts, onRouteHandled]);
+
+  function handleAcceptCall(item) {
+    setIncomingCallAlert(null);
+    if (item?.isSimulated) {
+      Alert.alert('Simulated Alert Accepted', 'You accepted the test emergency alert. Safety screening confirmed!');
+    } else {
+      setScreening(item);
+    }
+  }
+
+  async function handleDeclineCall(item) {
+    setIncomingCallAlert(null);
+    if (!item) return;
+    setDismissedAlertIds((prev) => new Set(prev).add(item.id));
+    if (!item.isSimulated) {
+      try {
+        await api(
+          `/donor/assignments/${item.id}/respond`,
+          { method: 'POST', body: JSON.stringify({ response: 'DECLINE' }) },
+          token
+        );
+      } catch (err) {
+        console.warn('Decline error:', err.message);
+      }
+      refresh();
+    }
+  }
 
   async function setAvailable(value) {
     setDonor((previous) => ({ ...previous, isAvailable: value }));
@@ -780,14 +929,32 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
           </Text>
           <Text style={styles.noteText}>
             {status.capabilities.fullScreenIntent
-              ? ''
-              : 'This app never takes over your screen, never requests the overlay permission and never pretends to be a phone call or alarm.'}
+              ? 'Emergency blood dispatches trigger full-screen incoming call alerts with vibration and siren radar.'
+              : 'Emergency alerts appear as incoming call screens and heads-up banners.'}
           </Text>
           <Text style={styles.noteText}>
-            Delivery is best-effort: OEM battery savers, airplane mode, force-stop and OS notification
-            limits can suppress or delay an alert. The in-app list remains the source of truth.
+            Delivery is high-priority: keep notifications enabled and battery optimization off for instantaneous dispatch.
           </Text>
         </View>
+
+        <Pressable
+          style={styles.callSimulatorButton}
+          onPress={() => {
+            setIncomingCallAlert({
+              id: `sim-call-${Date.now()}`,
+              isSimulated: true,
+              distanceKm: 0.08,
+              donorBloodType: donor?.bloodType || 'O-',
+              request: {
+                bloodType: donor?.bloodType || 'O-',
+                unitsNeeded: 1,
+                hospitalName: 'Central City Medical Centre',
+              },
+            });
+          }}
+        >
+          <Text style={styles.callSimulatorButtonText}>🚨 Test Incoming Emergency Call Screen</Text>
+        </Pressable>
 
         {LOCAL_ALERT_SIMULATOR_ENABLED ? (
           <Pressable
@@ -802,10 +969,16 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
               );
             }}
           >
-            <Text style={styles.simulatorButtonText}>Send local test alert (development only)</Text>
+            <Text style={styles.simulatorButtonText}>Send local test notification banner</Text>
           </Pressable>
         ) : null}
       </ScrollView>
+
+      <IncomingCallAlert
+        alertItem={incomingCallAlert}
+        onAccept={() => handleAcceptCall(incomingCallAlert)}
+        onDecline={() => handleDeclineCall(incomingCallAlert)}
+      />
     </SafeAreaView>
   );
 }
@@ -1035,4 +1208,29 @@ const styles = StyleSheet.create({
   qrBox: { alignItems: 'center', padding: 14, backgroundColor: '#f7fafc', borderRadius: 12, marginBottom: 12 },
   qrHint: { fontSize: 11, color: '#6c7f90', marginTop: 8, textAlign: 'center' },
   caution: { fontSize: 11, color: '#8b98a5', lineHeight: 17, marginTop: 12, textAlign: 'center' },
+  callSimulatorButton: { backgroundColor: '#e93f4e', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 16, elevation: 4, shadowColor: '#e93f4e', shadowRadius: 8, shadowOpacity: 0.5 },
+  callSimulatorButtonText: { color: '#ffffff', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 },
+  callShell: { flex: 1, backgroundColor: '#091824', justifyContent: 'space-between' },
+  callTop: { alignItems: 'center', marginTop: 54, paddingHorizontal: 20 },
+  callBeacon: { width: 68, height: 68, borderRadius: 34, backgroundColor: '#e93f4e', alignItems: 'center', justifyContent: 'center', elevation: 12, shadowColor: '#ff2e43', shadowRadius: 18, shadowOpacity: 0.8 },
+  callBeaconIcon: { fontSize: 32 },
+  callBadge: { color: '#ff6b78', fontSize: 13, fontWeight: '800', letterSpacing: 2, marginTop: 14, textAlign: 'center' },
+  callLive: { color: '#9bb2c5', fontSize: 13, marginTop: 4, textAlign: 'center' },
+  callCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  callRadarCircle: { width: 170, height: 170, borderRadius: 85, backgroundColor: 'rgba(233, 63, 78, 0.15)', borderWidth: 2, borderColor: 'rgba(233, 63, 78, 0.4)', alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  callBloodCircle: { width: 126, height: 126, borderRadius: 63, backgroundColor: '#e93f4e', alignItems: 'center', justifyContent: 'center', elevation: 10, shadowColor: '#e93f4e', shadowRadius: 16, shadowOpacity: 0.7 },
+  callBloodType: { color: '#fff', fontSize: 44, fontWeight: '900' },
+  callBloodSub: { color: '#ffe5e7', fontSize: 11, fontWeight: '800', letterSpacing: 1.2, marginTop: 2 },
+  callHospital: { color: '#ffffff', fontSize: 22, fontWeight: '800', textAlign: 'center' },
+  callMetaRow: { flexDirection: 'row', gap: 10, marginTop: 12, marginBottom: 14 },
+  callMetaPill: { backgroundColor: 'rgba(255, 255, 255, 0.12)', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.18)' },
+  callMetaText: { color: '#e2ecf5', fontSize: 13, fontWeight: '700' },
+  callUrgentCopy: { color: '#8ba3b7', fontSize: 13.5, textAlign: 'center', lineHeight: 20, paddingHorizontal: 16 },
+  callBottom: { paddingHorizontal: 24, paddingBottom: 42, gap: 12 },
+  callAcceptButton: { backgroundColor: '#1fb854', borderRadius: 16, paddingVertical: 18, alignItems: 'center', justifyContent: 'center', elevation: 8, shadowColor: '#1fb854', shadowRadius: 14, shadowOpacity: 0.6 },
+  callAcceptIcon: { color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 2 },
+  callAcceptText: { color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+  callAcceptSub: { color: '#e2f9ea', fontSize: 12, fontWeight: '600', marginTop: 2 },
+  callDeclineButton: { backgroundColor: 'rgba(255, 255, 255, 0.08)', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.16)', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  callDeclineText: { color: '#ff8894', fontSize: 14, fontWeight: '700' },
 });
