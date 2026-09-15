@@ -200,6 +200,7 @@ export function subscribeDonorAssignments(donorOrId, onAssignments) {
     asgnsRef,
     (snapshot) => {
       const list = [];
+      const seenRequestIds = new Set();
       snapshot.forEach((d) => {
         const item = d.data();
         const asgnDonorId = item.donor_id;
@@ -210,6 +211,11 @@ export function subscribeDonorAssignments(donorOrId, onAssignments) {
           (donorDigits && asgnPhoneDigits && asgnPhoneDigits === donorDigits);
 
         if (isMatch) {
+          // Deduplicate by request_id: never show duplicate alerts for the same emergency
+          const reqKey = item.request_id || d.id;
+          if (seenRequestIds.has(reqKey)) return;
+          seenRequestIds.add(reqKey);
+
           list.push({
             id: d.id,
             requestId: item.request_id,

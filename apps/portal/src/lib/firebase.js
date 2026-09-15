@@ -193,6 +193,8 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
     const donorsSnap = await getDocs(donorsRef);
     let matched = 0;
     const compatibleList = COMPATIBLE_DONORS[bloodType] || [bloodType, 'O-'];
+    const seenPhones = new Set();
+    const seenDonorIds = new Set();
 
     for (const donorDoc of donorsSnap.docs) {
       const donor = donorDoc.data();
@@ -201,17 +203,26 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
       const isAvail = donor.is_available ?? donor.isAvailable ?? true;
       if (!isAvail) continue;
 
+      const donorPhone = donor.phone || '';
+      const donorDigits = normalizePhoneDigits(donorPhone);
+
+      // Deduplicate so a donor is never alerted multiple times for the same request
+      if (donorDigits && seenPhones.has(donorDigits)) continue;
+      if (seenDonorIds.has(donorId)) continue;
+
       if (compatibleList.includes(dBlood)) {
+        if (donorDigits) seenPhones.add(donorDigits);
+        seenDonorIds.add(donorId);
+
         const asgnId = 'asgn_' + id + '_' + donorId;
         const arrivalOtp = String(Math.floor(100000 + Math.random() * 900000));
-        const donorPhone = donor.phone || '';
         const asgnData = {
           id: asgnId,
           request_id: id,
           donor_id: donorId,
           donor_name: donor.full_name || donor.name || 'Volunteer Donor',
           donor_phone: donorPhone,
-          donor_phone_digits: normalizePhoneDigits(donorPhone),
+          donor_phone_digits: donorDigits,
           blood_type: dBlood,
           distance_km: Number(donor.distance_km || 1.2),
           distance_meters: 1200,

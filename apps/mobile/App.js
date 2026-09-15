@@ -1053,8 +1053,10 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
 
   // When a pending dispatch arrives, automatically launch the incoming emergency call alert and bring app to front
   useEffect(() => {
-    const pendingAlert = alerts.find((item) => item.status === 'PINGED');
-    if (pendingAlert && !dismissedAlertIds.has(pendingAlert.id) && !screening && !incomingCallAlert) {
+    const pendingAlert = alerts.find(
+      (item) => item.status === 'PINGED' && !dismissedAlertIds.has(item.id) && !dismissedAlertIds.has(item.requestId)
+    );
+    if (pendingAlert && !screening && !incomingCallAlert) {
       setIncomingCallAlert(pendingAlert);
       OverlayService.bringAppToForeground().catch(() => {});
     }
@@ -1074,6 +1076,9 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
 
   function handleAcceptCall(item) {
     setIncomingCallAlert(null);
+    if (item) {
+      setDismissedAlertIds((prev) => new Set(prev).add(item.id).add(item.requestId));
+    }
     if (item?.isSimulated) {
       Alert.alert('Simulated Alert Accepted', 'You accepted the test emergency alert. Safety screening confirmed!');
     } else {
@@ -1084,7 +1089,7 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
   async function handleDeclineCall(item) {
     setIncomingCallAlert(null);
     if (!item) return;
-    setDismissedAlertIds((prev) => new Set(prev).add(item.id));
+    setDismissedAlertIds((prev) => new Set(prev).add(item.id).add(item.requestId));
     if (!item.isSimulated) {
       try {
         if (token?.startsWith('firebase.') || !token) {
