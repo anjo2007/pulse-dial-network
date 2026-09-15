@@ -8,9 +8,11 @@ export function normalizeFunctionUrl(rawUrl) {
   const route = params.get('__route');
   params.delete('__route');
   let target = path;
-  if ((path === '/api' || path === '/api/') && route) {
-    if (!route.startsWith('/') || route.startsWith('//') || /[\\\\?#\u0000-\u001f]/.test(route)) return null;
+  if ((path === '/api' || path === '/api/' || path === '/api/index.js' || path === '/api/index') && route) {
+    if (!route.startsWith('/') || route.startsWith('//') || /[\\?#\u0000-\u001f]/.test(route)) return null;
     target = `/api${route}`;
+  } else if (path === '/api/index.js' || path === '/api/index') {
+    target = '/api';
   }
   return target + (params.size ? `?${params}` : '');
 }
