@@ -1,9 +1,8 @@
 {
   "version": 2,
-  "framework": null,
   "installCommand": "npm ci --workspace @pulse/api --workspace @pulse/portal --include-workspace-root",
   "buildCommand": "npm run build",
-  "outputDirectory": "apps/portal/dist",
+  "outputDirectory": "dist",
   "functions": {
     "api/index.js": { "maxDuration": 60 }
   },

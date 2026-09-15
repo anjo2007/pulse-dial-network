@@ -11,7 +11,7 @@
     "dev:api": "npm run dev --workspace @pulse/api",
     "dev:portal": "npm run dev --workspace @pulse/portal",
     "dev:mobile": "npm run start --workspace @pulse/mobile",
-    "build": "node --check api/index.js && node --check services/api/src/app.js && npm run build --workspace @pulse/portal",
+    "build": "node --check api/index.js && node --check services/api/src/app.js && npm run build --workspace @pulse/portal && node -e \"const fs=require('fs'); fs.cpSync('apps/portal/dist', 'dist', { recursive: true });\"",
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
     "check:mobile": "npm run check --workspace @pulse/mobile",
