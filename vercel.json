@@ -7,9 +7,6 @@
   "functions": {
     "api/index.js": { "maxDuration": 60 }
   },
-  "crons": [
-    { "path": "/api/internal/dispatch", "schedule": "* * * * *" }
-  ],
   "headers": [
     {
       "source": "/(.*)",
