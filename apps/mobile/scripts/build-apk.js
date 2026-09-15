@@ -53,6 +53,17 @@ const debugApk = resolve(androidDir, 'app/build/outputs/apk/debug/app-debug.apk'
 if (existsSync(releaseApk)) rmSync(releaseApk, { force: true });
 if (existsSync(debugApk)) rmSync(debugApk, { force: true });
 
+const rootEnvPath = resolve(rootDir, '.env');
+if (existsSync(rootEnvPath) && typeof process.loadEnvFile === 'function') {
+  try {
+    process.loadEnvFile(rootEnvPath);
+    console.log(`Loaded environment from ${rootEnvPath}`);
+  } catch (_) {}
+}
+
+const defaultApiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.5:4000';
+console.log(`Bundling default API URL: ${defaultApiUrl}`);
+
 console.log('\nRunning Gradle assembleRelease / assembleDebug...');
 const env = {
   ...process.env,
@@ -61,6 +72,7 @@ const env = {
   ANDROID_SDK_ROOT: androidHome,
   PATH: `${javaHome}\\bin;${androidHome}\\platform-tools;${process.env.PATH}`,
   PUSH_TOKEN_ENABLED: process.env.PUSH_TOKEN_ENABLED || 'false',
+  EXPO_PUBLIC_API_URL: defaultApiUrl,
   PULSE_ALLOW_POLLING_ONLY: 'true',
   PULSE_ALLOW_DEBUG_SIGNING: 'true',
 };

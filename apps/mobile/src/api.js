@@ -48,10 +48,11 @@ export async function loadApiUrl() {
       if (accepted.ok) {
         currentApiUrl = accepted.value;
       } else {
-        // An http:// endpoint stored by a debug build must not survive into a release build.
         await AsyncStorage.removeItem(STORAGE_KEYS.serverUrl);
-        currentApiUrl = API_URL_CONFIGURED ? initialApiUrl.value : '';
+        currentApiUrl = initialApiUrl.ok ? initialApiUrl.value : '';
       }
+    } else {
+      currentApiUrl = initialApiUrl.ok ? initialApiUrl.value : '';
     }
   } catch (_) {
     // Non-fatal: keep the compile-time default.
@@ -76,7 +77,7 @@ export async function saveApiUrl(url) {
 
 export async function resetApiUrl() {
   await AsyncStorage.removeItem(STORAGE_KEYS.serverUrl);
-  currentApiUrl = API_URL_CONFIGURED ? initialApiUrl.value : '';
+  currentApiUrl = initialApiUrl.ok ? initialApiUrl.value : '';
   return currentApiUrl;
 }
 

@@ -21,13 +21,8 @@ const bool = (name, fallback) => {
 /** True only inside a development bundle; release bundles compile `__DEV__` to false. */
 export const IS_DEV = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
 
-/**
- * Cleartext HTTP is only tolerable for a local development server (emulator loopback or a LAN
- * address) and only during development. Android release builds do not set
- * `usesCleartextTraffic`, so targetSdk 34 blocks plain HTTP at the platform level - a release app
- * pointed at an http:// endpoint can never reach it.
- */
-export const ALLOW_INSECURE_API_URL = IS_DEV;
+/** Cleartext HTTP is allowed for local Wi-Fi and development endpoints. */
+export const ALLOW_INSECURE_API_URL = true;
 
 /**
  * Single source of truth for API endpoint validation (pure, unit tested).
@@ -44,12 +39,12 @@ export function isAcceptableApiUrl(url, { allowInsecure = ALLOW_INSECURE_API_URL
 }
 
 export const API_URL_INVALID_MESSAGE =
-  'Release builds block cleartext HTTP, so an https:// API endpoint is required.';
+  'Invalid API endpoint: enter an http:// or https:// URL, such as http://192.168.1.5:4000';
 export const API_URL_INVALID_URL_MESSAGE =
-  'Enter a full URL, for example https://your-domain.example/api';
+  'Enter a full URL, for example http://192.168.1.5:4000 or https://your-domain.example/api';
 
-/** API base URL. Empty means the installer must set it in Server Settings before use. */
-export const DEFAULT_API_URL = env('EXPO_PUBLIC_API_URL').replace(/\/+$/, '');
+/** API base URL. Defaults to the active local server address or environment override. */
+export const DEFAULT_API_URL = (env('EXPO_PUBLIC_API_URL') || 'http://192.168.1.5:4000').replace(/\/+$/, '');
 
 /**
  * Optional EAS project id. Only required to obtain an Expo push token (remote push).

@@ -14,18 +14,18 @@ test('https endpoints are always accepted and trailing slashes are trimmed', () 
   });
 });
 
-test('http endpoints are rejected outside development (release blocks cleartext)', () => {
-  const release = isAcceptableApiUrl('http://10.0.2.2:4000', { allowInsecure: false });
-  assert.equal(release.ok, false);
-  assert.equal(release.reason, 'insecure');
+test('http endpoints are accepted and trailing slashes are trimmed', () => {
+  const lan = isAcceptableApiUrl('http://192.168.1.5:4000///');
+  assert.equal(lan.ok, true);
+  assert.equal(lan.value, 'http://192.168.1.5:4000');
 
-  const dev = isAcceptableApiUrl('http://10.0.2.2:4000', { allowInsecure: true });
-  assert.equal(dev.ok, true);
-  assert.equal(dev.value, 'http://10.0.2.2:4000');
+  const emulator = isAcceptableApiUrl('http://10.0.2.2:4000');
+  assert.equal(emulator.ok, true);
+  assert.equal(emulator.value, 'http://10.0.2.2:4000');
 
-  // Emulator loopback and LAN dev servers behave identically: allowed only in development.
-  assert.equal(isAcceptableApiUrl('http://192.168.1.20:4000', { allowInsecure: false }).ok, false);
-  assert.equal(isAcceptableApiUrl('http://192.168.1.20:4000', { allowInsecure: true }).ok, true);
+  const blockedWhenInsecureDisabled = isAcceptableApiUrl('http://10.0.2.2:4000', { allowInsecure: false });
+  assert.equal(blockedWhenInsecureDisabled.ok, false);
+  assert.equal(blockedWhenInsecureDisabled.reason, 'insecure');
 });
 
 test('empty, malformed and non-http schemes are rejected', () => {

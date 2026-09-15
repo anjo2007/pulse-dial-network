@@ -109,6 +109,9 @@ function SignIn({ onSignedIn }) {
         body: JSON.stringify({ phone: phone.trim() }),
       });
       setNotice(result.message);
+      if (result.message && result.message.includes('123456') && !code) {
+        setCode('123456');
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -164,8 +167,7 @@ function SignIn({ onSignedIn }) {
           {serverUrl ? null : (
             <View style={styles.warningBadge}>
               <Text style={styles.warningBadgeText}>
-                No API endpoint configured for this build. Open Server Settings and enter an https://
-                endpoint before signing in.
+                No API endpoint configured for this build. Open Server Settings below to enter your Pulse API URL.
               </Text>
             </View>
           )}
@@ -303,8 +305,27 @@ function SignIn({ onSignedIn }) {
                 onChangeText={setServerUrl}
                 style={[styles.input, styles.configInput]}
                 autoCapitalize="none"
-                placeholder="https://your-domain.example/api"
+                placeholder="http://192.168.1.5:4000"
               />
+              <Text style={[styles.label, { marginTop: 4, marginBottom: 6 }]}>Quick presets</Text>
+              <View style={[styles.typeRow, { marginBottom: 12 }]}>
+                <Pressable
+                  onPress={() => setServerUrl('http://192.168.1.5:4000')}
+                  style={[styles.typeChip, serverUrl === 'http://192.168.1.5:4000' && styles.typeSelected]}
+                >
+                  <Text style={[styles.typeText, serverUrl === 'http://192.168.1.5:4000' && styles.typeTextSelected]}>
+                    Wi-Fi (192.168.1.5)
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setServerUrl('http://10.0.2.2:4000')}
+                  style={[styles.typeChip, serverUrl === 'http://10.0.2.2:4000' && styles.typeSelected]}
+                >
+                  <Text style={[styles.typeText, serverUrl === 'http://10.0.2.2:4000' && styles.typeTextSelected]}>
+                    Emulator (10.0.2.2)
+                  </Text>
+                </Pressable>
+              </View>
               <View style={styles.configButtons}>
                 <View style={styles.flex}>
                   <Button title="Save" onPress={saveServer} />
