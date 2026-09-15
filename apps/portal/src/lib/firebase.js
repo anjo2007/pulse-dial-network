@@ -69,7 +69,7 @@ export async function authenticateHospital({ email, password }) {
     hospitalId: hospitalId,
     hospitalName: hospital.name,
     iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 7 * 24 * 3600
+    exp: Date.now() + 7 * 24 * 3600 * 1000,
   };
   const tokenSegment = btoa(JSON.stringify(tokenPayload)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const token = `${tokenSegment}.firebase`;

@@ -61,7 +61,7 @@ export function createSession(loginResult, { now = Date.now() } = {}) {
     token,
     role: 'hospital',
     subjectId: typeof payload.id === 'string' ? payload.id : null,
-    expiresAtMs: Number.isFinite(exp) && exp > 0 ? exp : now + FALLBACK_SESSION_MS,
+    expiresAtMs: Number.isFinite(exp) && exp > 0 ? (exp > 1e12 ? exp : exp * 1000) : now + FALLBACK_SESSION_MS,
     hospital: sanitizeHospital(loginResult?.hospital),
   };
 }
