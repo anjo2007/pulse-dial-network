@@ -42,6 +42,7 @@ import {
   respondAssignment,
   markAssignmentArrived,
 } from './src/services/firebase.js';
+import { OverlayService } from './src/services/overlayPermission.js';
 
 // Demo/debug affordances (prefilled demo OTP) only ever exist in development builds.
 const DEMO_MODE = typeof __DEV__ !== 'undefined' && __DEV__;
@@ -338,6 +339,51 @@ function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
           </View>
         </ScrollView>
       </SafeAreaView>
+    </Modal>
+  );
+}
+
+function OverlayPermissionModal({ visible, onClose, onOpenSettings }) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.pickerBackdrop}>
+        <View style={styles.overlayModalCard}>
+          <View style={styles.overlayIconCircle}>
+            <Text style={{ fontSize: 32 }}>📲</Text>
+          </View>
+          <Text style={styles.overlayModalTitle}>Enable "Display Over Other Apps"</Text>
+          <Text style={styles.overlayModalSubtitle}>
+            Required for incoming emergency blood dispatch calls to hover and pop up while you are using other apps or when the screen is locked.
+          </Text>
+
+          <View style={styles.overlayStepsContainer}>
+            <Text style={styles.overlayStepTitle}>Follow these quick steps:</Text>
+            <Text style={styles.overlayStepText}>
+              1. Tap <Text style={{ fontWeight: 'bold' }}>"Open Settings"</Text> below
+            </Text>
+            <Text style={styles.overlayStepText}>
+              2. Find and select <Text style={{ fontWeight: 'bold' }}>Pulse Dial</Text> in the list
+            </Text>
+            <Text style={styles.overlayStepText}>
+              3. Switch <Text style={{ fontWeight: 'bold' }}>"Allow display over other apps"</Text> to <Text style={{ color: '#2e7d32', fontWeight: 'bold' }}>ON</Text>
+            </Text>
+            <Text style={styles.overlayStepText}>
+              4. Tap Back to return to Pulse Dial
+            </Text>
+          </View>
+
+          <View style={{ gap: 10, marginTop: 18, width: '100%' }}>
+            <Button
+              title="Open Settings →"
+              onPress={() => {
+                onOpenSettings();
+                onClose();
+              }}
+            />
+            <Button title="Remind Me Later" variant="plain" onPress={onClose} />
+          </View>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -804,6 +850,27 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
   const [incomingCallAlert, setIncomingCallAlert] = useState(null);
   const [dismissedAlertIds, setDismissedAlertIds] = useState(() => new Set());
   const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [hasOverlayPermission, setHasOverlayPermission] = useState(true);
+  const [showOverlayGuide, setShowOverlayGuide] = useState(false);
+
+  const checkOverlay = useCallback(async () => {
+    try {
+      const granted = await OverlayService.canDrawOverlays();
+      setHasOverlayPermission(granted);
+      return granted;
+    } catch (_) {
+      return true;
+    }
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const granted = await checkOverlay();
+      if (!granted) {
+        setShowOverlayGuide(true);
+      }
+    })();
+  }, [checkOverlay]);
 
   const [realtimeNonce, setRealtimeNonce] = useState(0);
   const realtimeRef = useRef(null);
@@ -936,6 +1003,7 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
     const subscription = AppState?.addEventListener?.('change', (next) => {
       if (next === 'active') {
         refresh();
+        checkOverlay();
         start();
       } else {
         stop();
@@ -946,7 +1014,7 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
       stop();
       subscription?.remove?.();
     };
-  }, [refresh, syncLocation, refreshAlerting, registerDevice]);
+  }, [refresh, syncLocation, refreshAlerting, registerDevice, checkOverlay]);
 
   // Realtime is a foreground-only optimisation: no background socket, and it never replaces polling.
   useEffect(() => {
@@ -972,11 +1040,12 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
     if (receiveNonce > 0 || realtimeNonce > 0) refresh();
   }, [receiveNonce, realtimeNonce, refresh]);
 
-  // When a pending dispatch arrives, automatically launch the incoming emergency call alert
+  // When a pending dispatch arrives, automatically launch the incoming emergency call alert and bring app to front
   useEffect(() => {
     const pendingAlert = alerts.find((item) => item.status === 'PINGED');
     if (pendingAlert && !dismissedAlertIds.has(pendingAlert.id) && !screening && !incomingCallAlert) {
       setIncomingCallAlert(pendingAlert);
+      OverlayService.bringAppToForeground().catch(() => {});
     }
   }, [alerts, dismissedAlertIds, screening, incomingCallAlert]);
 
@@ -1116,6 +1185,22 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
 
         <AlertStatusCard status={status} busy={alertingBusy} onAction={handleStatusAction} />
 
+        {!hasOverlayPermission && (
+          <Pressable style={styles.overlayBanner} onPress={() => setShowOverlayGuide(true)}>
+            <View style={styles.overlayBannerIcon}>
+              <Text style={{ fontSize: 20 }}>📲</Text>
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.overlayBannerEyebrow}>ACTION REQUIRED FOR HOVER ALERTS</Text>
+              <Text style={styles.overlayBannerTitle}>Enable "Display Over Other Apps"</Text>
+              <Text style={styles.overlayBannerText}>
+                Allow Pulse Dial to pop up emergency alert calls over other apps. Tap to configure.
+              </Text>
+            </View>
+            <Text style={styles.overlayBannerAction}>&gt;</Text>
+          </Pressable>
+        )}
+
         {pending && (
           <Pressable style={styles.alertBanner} onPress={() => setScreening(pending)}>
             <View style={styles.flex}>
@@ -1234,6 +1319,24 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
             <Text style={styles.simulatorButtonText}>Send local test notification banner</Text>
           </Pressable>
         ) : null}
+
+        <Pressable
+          style={[
+            styles.overlayStatusButton,
+            hasOverlayPermission ? styles.overlayStatusButtonOn : styles.overlayStatusButtonOff,
+          ]}
+          onPress={() => setShowOverlayGuide(true)}
+        >
+          <Text
+            style={
+              hasOverlayPermission ? styles.overlayStatusButtonTextOn : styles.overlayStatusButtonTextOff
+            }
+          >
+            {hasOverlayPermission
+              ? '✓ Display Over Other Apps: Active (Hover Alert Ready)'
+              : '⚙️ Configure "Display Over Other Apps" (Hover Alert)'}
+          </Text>
+        </Pressable>
       </ScrollView>
 
       <IncomingCallAlert
@@ -1250,6 +1353,12 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
           setDonor((prev) => ({ ...prev, ...donorView(updated) }));
           refresh();
         }}
+      />
+
+      <OverlayPermissionModal
+        visible={showOverlayGuide}
+        onClose={() => setShowOverlayGuide(false)}
+        onOpenSettings={() => OverlayService.openOverlaySettings()}
       />
     </SafeAreaView>
   );
@@ -1538,4 +1647,22 @@ const styles = StyleSheet.create({
   callAcceptSub: { color: '#e2f9ea', fontSize: 12, fontWeight: '600', marginTop: 2 },
   callDeclineButton: { backgroundColor: 'rgba(255, 255, 255, 0.08)', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.16)', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   callDeclineText: { color: '#ff8894', fontSize: 14, fontWeight: '700' },
+  overlayBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff3cd', borderColor: '#ffeeba', borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 12, marginBottom: 4, gap: 10 },
+  overlayBannerIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  overlayBannerEyebrow: { color: '#856404', fontSize: 9.5, fontWeight: '800', letterSpacing: 0.8 },
+  overlayBannerTitle: { color: '#856404', fontSize: 14, fontWeight: '800', marginTop: 1 },
+  overlayBannerText: { color: '#66512c', fontSize: 11.5, marginTop: 2, lineHeight: 16 },
+  overlayBannerAction: { color: '#856404', fontSize: 18, fontWeight: '800' },
+  overlayModalCard: { width: '100%', maxWidth: 360, backgroundColor: '#fff', borderRadius: 20, padding: 22, alignItems: 'center', elevation: 12 },
+  overlayIconCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#fff1f2', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  overlayModalTitle: { fontSize: 18, fontWeight: '800', color: '#17354c', textAlign: 'center' },
+  overlayModalSubtitle: { fontSize: 13, color: '#57697a', textAlign: 'center', marginTop: 6, lineHeight: 18, marginBottom: 16 },
+  overlayStepsContainer: { width: '100%', backgroundColor: '#f7fafc', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#e2ecf5' },
+  overlayStepTitle: { fontSize: 13, fontWeight: '800', color: '#17354c', marginBottom: 8 },
+  overlayStepText: { fontSize: 12, color: '#3d5265', lineHeight: 20, marginBottom: 4 },
+  overlayStatusButton: { borderRadius: 10, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', marginTop: 12 },
+  overlayStatusButtonOff: { backgroundColor: '#ffebee', borderWidth: 1, borderColor: '#ffcdd2' },
+  overlayStatusButtonOn: { backgroundColor: '#e8f5e9', borderWidth: 1, borderColor: '#c8e6c9' },
+  overlayStatusButtonTextOff: { color: '#c62828', fontWeight: '800', fontSize: 12.5 },
+  overlayStatusButtonTextOn: { color: '#2e7d32', fontWeight: '800', fontSize: 12.5 },
 });
