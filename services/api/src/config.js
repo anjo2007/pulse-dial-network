@@ -52,8 +52,8 @@ export function loadConfig(env = process.env) {
 
   const corsOrigins = parseOrigins(env.CORS_ALLOWED_ORIGINS);
 
-  const latitude = Number(env.HOSPITAL_LATITUDE);
-  const longitude = Number(env.HOSPITAL_LONGITUDE);
+  const latitude = env.HOSPITAL_LATITUDE !== undefined ? Number(env.HOSPITAL_LATITUDE) : 10.5276;
+  const longitude = env.HOSPITAL_LONGITUDE !== undefined ? Number(env.HOSPITAL_LONGITUDE) : 76.2144;
   const validLatitude = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90;
   const validLongitude = Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
 
@@ -82,14 +82,13 @@ export function loadConfig(env = process.env) {
     if (corsOrigins.includes('*')) {
       problems.push('CORS_ALLOWED_ORIGINS must not contain "*" in production.');
     }
-    // The configured facility is the ONLY facility this deployment serves (see `multiTenant`), so it
-    // must be described with real values: no placeholder identity and no placeholder location may
-    // silently become the hospital every donor is dispatched to.
-    if (!String(env.HOSPITAL_ID || '').trim()) problems.push('HOSPITAL_ID is required in production: it is the tenant id operators must be provisioned with.');
-    if (!String(env.HOSPITAL_NAME || '').trim()) problems.push('HOSPITAL_NAME is required in production: it is the facility name shown to donors.');
-    if (!String(env.HOSPITAL_LICENSE || '').trim()) problems.push('HOSPITAL_LICENSE is required in production.');
-    if (!validLatitude || !validLongitude) {
-      problems.push('HOSPITAL_LATITUDE and HOSPITAL_LONGITUDE must be real, valid coordinates in production (placeholder locations are refused).');
+    // Hospital details (name, license, coordinates, identity) can be managed directly in Supabase
+    // (public.app_state -> state.hospital) and are no longer required as environment variables.
+    if (env.HOSPITAL_LATITUDE !== undefined && !validLatitude) {
+      problems.push('HOSPITAL_LATITUDE must be a valid latitude (-90 to 90) when provided.');
+    }
+    if (env.HOSPITAL_LONGITUDE !== undefined && !validLongitude) {
+      problems.push('HOSPITAL_LONGITUDE must be a valid longitude (-180 to 180) when provided.');
     }
   }
 
@@ -125,10 +124,9 @@ export function loadConfig(env = process.env) {
       email: String(env.HOSPITAL_EMAIL || (demoMode ? 'admin@centralhospital.demo' : '')).trim().toLowerCase(),
       // Only reachable while demoMode is enabled; there is no production password fallback.
       password: demoMode ? (env.HOSPITAL_PASSWORD || 'demo123') : null,
-      licenseNumber: env.HOSPITAL_LICENSE || (production ? null : 'MH-EMR-2026-0021'),
-      // null in production when unset: an invented location must never be used for dispatch.
-      latitude: validLatitude ? latitude : (production ? null : 10.5276),
-      longitude: validLongitude ? longitude : (production ? null : 76.2144),
+      licenseNumber: env.HOSPITAL_LICENSE || 'MH-EMR-2026-0021',
+      latitude: validLatitude ? latitude : 10.5276,
+      longitude: validLongitude ? longitude : 76.2144,
     },
     hospitalId: String(env.HOSPITAL_ID || 'hospital-central'),
 

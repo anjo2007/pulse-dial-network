@@ -339,10 +339,13 @@ export function createApi(options = {}) {
         const { data, error } = await client.auth.signInWithPassword({ email, password });
         const claims = data?.user ? readTrustedHospitalClaims(data.user) : null;
         if (!error && data?.user?.id && claims) {
+          const state = await store.read({ maxAgeMs: config.stateRefreshMs });
+          const currentHospital = state?.hospital || state?.hospitalConfig || config.hospital;
+          const expectedHospitalId = currentHospital.id || config.hospitalId;
           // This deployment serves exactly ONE configured facility (no per-tenant registry). A
           // trusted operator from a different facility is refused outright rather than being served
           // the wrong facility name and location.
-          if (config.production && !config.multiTenant && claims.hospitalId !== config.hospitalId) {
+          if (config.production && !config.multiTenant && claims.hospitalId !== expectedHospitalId) {
             logger.warn({ event: 'hospital_tenant_mismatch', requestId: req.requestId });
             return res.status(401).json({ error: 'Invalid hospital credentials.' });
           }
@@ -364,10 +367,13 @@ export function createApi(options = {}) {
 
     // Demo credentials exist only for an explicit local demo (DEMO_MODE=true outside production).
     if (!authenticated && config.demoMode) {
-      if (config.hospital.email && config.hospital.password
-        && email === config.hospital.email && password === config.hospital.password) {
+      const state = await store.read({ maxAgeMs: config.stateRefreshMs });
+      const currentHospital = state?.hospital || state?.hospitalConfig || config.hospital;
+      const demoEmail = currentHospital.email || config.hospital.email;
+      const demoPassword = currentHospital.password || config.hospital.password;
+      if (demoEmail && demoPassword && email === demoEmail && password === demoPassword) {
         authenticated = true;
-        tenantId = config.hospitalId;
+        tenantId = currentHospital.id || config.hospitalId;
       }
     }
 
@@ -379,16 +385,18 @@ export function createApi(options = {}) {
       : config.sessionTtlMs;
     if (ttlMs <= 0) return res.status(401).json({ error: 'Invalid hospital credentials.' });
 
-    const token = issueSession({ role: 'hospital', id: config.hospitalId, tenantId, authUserId, providerToken }, ttlMs);
+    const state = await store.read({ maxAgeMs: config.stateRefreshMs });
+    const currentHospital = state?.hospital || state?.hospitalConfig || config.hospital;
+    const token = issueSession({ role: 'hospital', id: currentHospital.id || config.hospitalId, tenantId, authUserId, providerToken }, ttlMs);
     res.json({
       token,
       hospital: {
-        id: config.hospital.id,
-        name: config.hospital.name,
-        email: config.hospital.email,
-        licenseNumber: config.hospital.licenseNumber,
-        latitude: config.hospital.latitude,
-        longitude: config.hospital.longitude,
+        id: currentHospital.id || config.hospital.id,
+        name: currentHospital.name || config.hospital.name,
+        email: currentHospital.email || email,
+        licenseNumber: currentHospital.licenseNumber || config.hospital.licenseNumber,
+        latitude: currentHospital.latitude ?? config.hospital.latitude,
+        longitude: currentHospital.longitude ?? config.hospital.longitude,
       },
     });
   });
@@ -529,6 +537,58 @@ export function createApi(options = {}) {
     return withdrawn;
   }
 
+  app.get('/hospital/profile', auth('hospital'), async (req, res) => {
+    const state = await store.read({ maxAgeMs: config.stateRefreshMs });
+    const hospital = state.hospital || state.hospitalConfig || config.hospital;
+    res.json({
+      id: hospital.id || config.hospitalId,
+      name: hospital.name || config.hospital.name,
+      email: hospital.email || config.hospital.email,
+      licenseNumber: hospital.licenseNumber || config.hospital.licenseNumber,
+      latitude: hospital.latitude ?? config.hospital.latitude,
+      longitude: hospital.longitude ?? config.hospital.longitude,
+    });
+  });
+
+  app.patch('/hospital/profile', auth('hospital'), async (req, res) => {
+    const { name, licenseNumber, latitude, longitude } = req.body || {};
+    if (name !== undefined && (!name || typeof name !== 'string' || !name.trim())) {
+      return res.status(400).json({ error: 'Hospital name cannot be empty.' });
+    }
+    if (licenseNumber !== undefined && (!licenseNumber || typeof licenseNumber !== 'string' || !licenseNumber.trim())) {
+      return res.status(400).json({ error: 'License number cannot be empty.' });
+    }
+    if (latitude !== undefined && (!Number.isFinite(Number(latitude)) || Number(latitude) < -90 || Number(latitude) > 90)) {
+      return res.status(400).json({ error: 'Latitude is invalid.' });
+    }
+    if (longitude !== undefined && (!Number.isFinite(Number(longitude)) || Number(longitude) < -180 || Number(longitude) > 180)) {
+      return res.status(400).json({ error: 'Longitude is invalid.' });
+    }
+
+    const now = clock();
+    const result = await store.mutate(state => {
+      if (!state.hospital) {
+        state.hospital = structuredClone(state.hospitalConfig || config.hospital);
+      }
+      if (name !== undefined) state.hospital.name = name.trim();
+      if (licenseNumber !== undefined) state.hospital.licenseNumber = licenseNumber.trim();
+      if (latitude !== undefined) state.hospital.latitude = Number(latitude);
+      if (longitude !== undefined) state.hospital.longitude = Number(longitude);
+
+      state.hospitalConfig = {
+        id: state.hospital.id,
+        name: state.hospital.name,
+        latitude: state.hospital.latitude,
+        longitude: state.hospital.longitude,
+      };
+
+      state.updatedAt = new Date(now).toISOString();
+      return { status: 200, hospital: state.hospital };
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json(result.hospital);
+  });
+
   app.get('/hospital/requests', auth('hospital'), async (req, res) => {
     const state = await store.read({ maxAgeMs: config.stateRefreshMs });
     const tenantId = req.subject.tenantId || req.subject.id;
@@ -556,8 +616,9 @@ export function createApi(options = {}) {
         cancelledAt: null,
       };
       state.requests.unshift(request);
+      const hospitalProfile = state.hospital || state.hospitalConfig || config.hospital;
       dispatchTier({
-        state, request, radius: 1, tier: 1, hospital: config.hospital, now,
+        state, request, radius: 1, tier: 1, hospital: hospitalProfile, now,
         onAssignment: (assignment) => enqueueDispatchNotifications({ state, assignment, request, config, now }),
       });
       state.updatedAt = new Date(now).toISOString();
@@ -574,8 +635,9 @@ export function createApi(options = {}) {
       if (CLOSED_REQUEST_STATUSES.includes(request.status)) return { status: 409, error: 'This request is already closed.' };
       if (request.currentRadiusKm >= 15) return { status: 409, error: 'This request has already reached the maximum dispatch radius.' };
       const radius = request.currentRadiusKm === 1 ? 5 : 15;
+      const hospitalProfile = state.hospital || state.hospitalConfig || config.hospital;
       dispatchTier({
-        state, request, radius, tier: radius === 5 ? 2 : 3, hospital: config.hospital, now,
+        state, request, radius, tier: radius === 5 ? 2 : 3, hospital: hospitalProfile, now,
         onAssignment: (assignment) => enqueueDispatchNotifications({ state, assignment, request, config, now }),
       });
       state.updatedAt = new Date(now).toISOString();
@@ -882,8 +944,9 @@ export function createApi(options = {}) {
           continue;
         }
         const radius = request.currentRadiusKm === 1 ? 5 : 15;
+        const hospitalProfile = state.hospital || state.hospitalConfig || config.hospital;
         dispatchTier({
-          state, request, radius, tier: radius === 5 ? 2 : 3, hospital: config.hospital, now,
+          state, request, radius, tier: radius === 5 ? 2 : 3, hospital: hospitalProfile, now,
           onAssignment: (assignment) => enqueueDispatchNotifications({ state, assignment, request, config, now }),
         });
         summary.escalated += 1;
@@ -939,6 +1002,16 @@ export function createApi(options = {}) {
           if (!Array.isArray(state.donors)) state.donors = [];
           if (!Array.isArray(state.requests)) state.requests = [];
           if (!Array.isArray(state.assignments)) state.assignments = [];
+          if (!state.hospital) {
+            state.hospital = {
+              id: state.hospitalConfig?.id || config.hospital.id,
+              name: state.hospitalConfig?.name || config.hospital.name,
+              email: config.hospital.email || 'admin@centralhospital.demo',
+              licenseNumber: config.hospital.licenseNumber || 'MH-EMR-2026-0021',
+              latitude: state.hospitalConfig?.latitude ?? config.hospital.latitude ?? 10.5276,
+              longitude: state.hospitalConfig?.longitude ?? config.hospital.longitude ?? 76.2144,
+            };
+          }
           return true;
         });
       } catch (error) {

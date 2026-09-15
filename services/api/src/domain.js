@@ -131,10 +131,13 @@ export function hasMeasuredLocation(donor) {
 }
 
 export function match({ state, request, radius, hospital, now = Date.now() }) {
+  const hosp = hospital || state?.hospital || state?.hospitalConfig || { latitude: 10.5276, longitude: 76.2144 };
+  const hLat = Number(hosp.latitude);
+  const hLon = Number(hosp.longitude);
   const alreadyPinged = new Set(state.assignments.filter(a => a.requestId === request.id).map(a => a.donorId));
   return state.donors
     .filter(donor => donor.isAvailable === true && hasMeasuredLocation(donor))
-    .map(donor => ({ donor, distanceKm: distanceKm(Number(hospital.latitude), Number(hospital.longitude), Number(donor.latitude), Number(donor.longitude)) }))
+    .map(donor => ({ donor, distanceKm: distanceKm(hLat, hLon, Number(donor.latitude), Number(donor.longitude)) }))
     .filter(({ donor, distanceKm: km }) => donor.isAvailable === true
       && isEligible(donor, now)
       && compatible(donor.bloodType, request.bloodType)
@@ -232,6 +235,15 @@ export function validateDeviceInput(input) {
 // seeded donors, requests, assignments, devices or notifications. Demo fixtures exist only for an
 // explicit DEMO_MODE=true local environment.
 export function createSeedState({ hospital, now = Date.now(), demo = false }) {
+  const hospitalData = {
+    id: hospital?.id || 'hospital-central',
+    name: hospital?.name || 'Central City Medical Centre',
+    email: hospital?.email || 'admin@centralhospital.demo',
+    licenseNumber: hospital?.licenseNumber || 'MH-EMR-2026-0021',
+    latitude: Number.isFinite(Number(hospital?.latitude)) ? Number(hospital.latitude) : 10.5276,
+    longitude: Number.isFinite(Number(hospital?.longitude)) ? Number(hospital.longitude) : 76.2144,
+  };
+
   if (!demo) {
     return {
       donors: [],
@@ -239,7 +251,8 @@ export function createSeedState({ hospital, now = Date.now(), demo = false }) {
       assignments: [],
       devices: [],
       outbox: [],
-      hospitalConfig: { id: hospital.id, name: hospital.name, latitude: hospital.latitude, longitude: hospital.longitude },
+      hospital: hospitalData,
+      hospitalConfig: { id: hospitalData.id, name: hospitalData.name, latitude: hospitalData.latitude, longitude: hospitalData.longitude },
       updatedAt: new Date(now).toISOString(),
     };
   }
@@ -274,7 +287,8 @@ export function createSeedState({ hospital, now = Date.now(), demo = false }) {
     assignments: [],
     devices: [],
     outbox: [],
-    hospitalConfig: { id: hospital.id, name: hospital.name, latitude: hospital.latitude, longitude: hospital.longitude },
+    hospital: hospitalData,
+    hospitalConfig: { id: hospitalData.id, name: hospitalData.name, latitude: hospitalData.latitude, longitude: hospitalData.longitude },
     updatedAt: new Date(now).toISOString(),
   };
 }

@@ -172,4 +172,47 @@ test('request and profile validation', async (t) => {
       await h.close();
     }
   });
+
+  await t.test('hospital profile can be inspected and updated in database state', async () => {
+    const h = await startApi();
+    try {
+      const token = (await h.loginHospital()).body.token;
+
+      // GET /hospital/profile returns current details
+      const profile = await h.request('/hospital/profile', { token });
+      assert.equal(profile.status, 200);
+      assert.equal(profile.body.id, 'hospital-central');
+      assert.equal(profile.body.name, 'Central City Medical Centre');
+
+      // PATCH /hospital/profile updates hospital details in database state
+      const update = await h.request('/hospital/profile', {
+        method: 'PATCH',
+        token,
+        body: {
+          name: 'Metro Emergency Hospital',
+          latitude: 10.5300,
+          longitude: 76.2200,
+        },
+      });
+      assert.equal(update.status, 200);
+      assert.equal(update.body.name, 'Metro Emergency Hospital');
+      assert.equal(update.body.latitude, 10.5300);
+      assert.equal(update.body.longitude, 76.2200);
+
+      // Verify the state in the store was updated
+      const state = await h.state();
+      assert.equal(state.hospital.name, 'Metro Emergency Hospital');
+      assert.equal(state.hospital.latitude, 10.5300);
+
+      // Verify validation rejects invalid coordinates
+      const invalidLat = await h.request('/hospital/profile', {
+        method: 'PATCH',
+        token,
+        body: { latitude: 999 },
+      });
+      assert.equal(invalidLat.status, 400);
+    } finally {
+      await h.close();
+    }
+  });
 });

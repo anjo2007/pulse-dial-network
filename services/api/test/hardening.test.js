@@ -192,23 +192,27 @@ test('deployment hardening', async (t) => {
     assert.equal(weakJwt.problems.some(problem => problem.includes('APP_JWT_SECRET')), true);
   });
 
-  await t.test('production refuses a placeholder facility identity or location', () => {
-    const noId = loadConfig(productionEnv({ HOSPITAL_ID: undefined }));
-    assert.equal(noId.problems.some(problem => problem.includes('HOSPITAL_ID')), true);
-
-    const noName = loadConfig(productionEnv({ HOSPITAL_NAME: undefined }));
-    assert.equal(noName.problems.some(problem => problem.includes('HOSPITAL_NAME')), true);
-
-    const noLicense = loadConfig(productionEnv({ HOSPITAL_LICENSE: undefined }));
-    assert.equal(noLicense.problems.some(problem => problem.includes('HOSPITAL_LICENSE')), true);
-
-    const fakeLocation = loadConfig(productionEnv({ HOSPITAL_LATITUDE: undefined, HOSPITAL_LONGITUDE: undefined }));
-    assert.equal(fakeLocation.problems.some(problem => problem.includes('HOSPITAL_LATITUDE')), true);
-    assert.equal(fakeLocation.hospital.latitude, null, 'no invented dispatch location');
-    assert.equal(fakeLocation.hospital.longitude, null);
+  await t.test('hospital environment variables are optional in production (stored in Supabase) and invalid coordinates are refused', () => {
+    // When hospital env variables are omitted, production succeeds with zero problems because
+    // facility details (name, license, coordinates) are managed dynamically in Supabase app_state.
+    const noHospitalEnv = loadConfig(productionEnv({
+      HOSPITAL_ID: undefined,
+      HOSPITAL_NAME: undefined,
+      HOSPITAL_LICENSE: undefined,
+      HOSPITAL_LATITUDE: undefined,
+      HOSPITAL_LONGITUDE: undefined,
+    }));
+    assert.deepEqual(noHospitalEnv.problems, []);
+    assert.equal(noHospitalEnv.hospital.id, 'hospital-central');
+    assert.equal(noHospitalEnv.hospital.name, 'Central City Medical Centre');
+    assert.equal(noHospitalEnv.hospital.latitude, 10.5276);
+    assert.equal(noHospitalEnv.hospital.longitude, 76.2144);
 
     const outOfRange = loadConfig(productionEnv({ HOSPITAL_LATITUDE: '999', HOSPITAL_LONGITUDE: '76.2' }));
     assert.equal(outOfRange.problems.some(problem => problem.includes('HOSPITAL_LATITUDE')), true);
+
+    const outOfRangeLon = loadConfig(productionEnv({ HOSPITAL_LATITUDE: '10.5', HOSPITAL_LONGITUDE: '999' }));
+    assert.equal(outOfRangeLon.problems.some(problem => problem.includes('HOSPITAL_LONGITUDE')), true);
 
     const real = loadConfig(productionEnv());
     assert.deepEqual(real.problems, []);
