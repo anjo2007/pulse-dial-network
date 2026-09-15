@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { Badge, Field } from './ui.jsx';
 import { validateCredentials } from '../lib/validation.js';
-import { isAbortError } from '../lib/api.js';
+import { isAbortError, getCustomApiUrl, setCustomApiUrl } from '../lib/api.js';
 
 const DEMO_EMAIL = 'admin@centralhospital.demo';
 const DEMO_PASSWORD = 'demo123';
@@ -28,6 +28,8 @@ export default function Login({ api, notice = '', onSubmit }) {
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [demoAuth, setDemoAuth] = useState(false);
+  const [showServerSettings, setShowServerSettings] = useState(false);
+  const [serverUrl, setServerUrl] = useState(() => getCustomApiUrl());
 
   const emailRef = useRef(null);
   const passwordRef = useRef(null);
@@ -186,7 +188,70 @@ export default function Login({ api, notice = '', onSubmit }) {
         <button type="button" className="text-button demo-fill" onClick={useDemoCredentials} disabled={submitting}>
           Fill demo credentials
         </button>
-        <small>Demo accounts exist only in the local development seed. Never use them with real donor data.</small>
+
+        <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.75rem', fontSize: '0.85rem' }}>
+          <button
+            type="button"
+            className="text-button"
+            style={{ fontSize: '0.82rem', color: '#666', textDecoration: 'underline' }}
+            onClick={() => setShowServerSettings(v => !v)}
+          >
+            ⚙️ Server Settings ({getCustomApiUrl() || '/api (default)'})
+          </button>
+
+          {showServerSettings ? (
+            <div style={{ marginTop: '0.5rem', padding: '0.75rem', background: '#f8f9fa', borderRadius: '6px' }}>
+              <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 600 }}>API Base Endpoint:</label>
+              <input
+                type="text"
+                value={serverUrl}
+                placeholder="/api (default) or http://192.168.1.5:4000"
+                onChange={e => setServerUrl(e.target.value)}
+                style={{ width: '100%', marginBottom: '0.5rem', padding: '0.4rem', fontSize: '0.85rem' }}
+              />
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="text-button"
+                  style={{ fontSize: '0.78rem', background: '#e9ecef', padding: '0.2rem 0.5rem', borderRadius: '4px' }}
+                  onClick={() => setServerUrl('')}
+                >
+                  Default (/api)
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  style={{ fontSize: '0.78rem', background: '#e9ecef', padding: '0.2rem 0.5rem', borderRadius: '4px' }}
+                  onClick={() => setServerUrl('http://localhost:4000')}
+                >
+                  Localhost (4000)
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  style={{ fontSize: '0.78rem', background: '#e9ecef', padding: '0.2rem 0.5rem', borderRadius: '4px' }}
+                  onClick={() => setServerUrl('http://192.168.1.5:4000')}
+                >
+                  Wi-Fi (192.168.1.5)
+                </button>
+              </div>
+              <button
+                type="button"
+                style={{ fontSize: '0.82rem', padding: '0.35rem 0.75rem', background: '#222', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                onClick={() => {
+                  setCustomApiUrl(serverUrl);
+                  window.location.reload();
+                }}
+              >
+                Save & Apply
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <small style={{ display: 'block', marginTop: '0.5rem' }}>
+          Demo operator accounts exist in Supabase and the development seed. Never use them with real patient data.
+        </small>
       </form>
     </main>
   );

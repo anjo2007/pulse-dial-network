@@ -55,7 +55,7 @@ const FALLBACK_MESSAGES = {
   400: 'That request could not be processed. Check the details and try again.',
   401: 'Your session has expired. Please sign in again.',
   403: 'You do not have permission to perform that action.',
-  404: 'That record could not be found.',
+  404: 'The requested API endpoint was not found on this server (HTTP 404). Check API deployment.',
   409: 'That action conflicts with the current state. Refresh and try again.',
   429: 'Too many requests. Please slow down and try again shortly.',
   500: 'The dispatch service could not complete that operation. Please try again.',
@@ -79,13 +79,38 @@ function isRetryableStatus(status) {
   return status === 408 || status === 429 || status >= 500;
 }
 
+export const PORTAL_API_STORAGE_KEY = 'pulse_portal_api_url';
+
+export function getCustomApiUrl() {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(PORTAL_API_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setCustomApiUrl(url) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!url || !url.trim()) {
+      window.localStorage.removeItem(PORTAL_API_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(PORTAL_API_STORAGE_KEY, url.trim());
+    }
+  } catch {}
+}
+
 /**
  * Resolve the API base URL.
+ * - Stored user preference in localStorage wins if present.
  * - VITE_API_URL wins when explicitly configured (staging / separate API host).
  * - Otherwise the portal calls its own origin under /api, which is what both the
  *   Vite dev server proxy and the Vercel rewrite in production expose.
  */
 export function resolveApiBase(env) {
+  const custom = getCustomApiUrl();
+  if (custom) return custom.replace(/\/+$/, '');
   const configured = typeof env?.VITE_API_URL === 'string' ? env.VITE_API_URL.trim() : '';
   if (configured) return configured.replace(/\/+$/, '');
   return '/api';

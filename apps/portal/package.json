@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@pulse/api": "*",
     "@supabase/supabase-js": "^2.116.0",
     "@vitejs/plugin-react": "^4.7.0",
     "vite": "^6.4.3",
