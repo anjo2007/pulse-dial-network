@@ -3,6 +3,7 @@ import Dashboard from './components/Dashboard.jsx';
 import Login from './components/Login.jsx';
 import { createApiClient, resolveApiBase } from './lib/api.js';
 import { createPortalApi } from './lib/endpoints.js';
+import { authenticateHospital } from './lib/firebase.js';
 import {
   clearStoredSession,
   createSession,
@@ -69,7 +70,16 @@ export default function App() {
 
   const handleLogin = useCallback(
     async ({ email, password, persistent }) => {
-      const result = await api.login({ email, password });
+      let result;
+      try {
+        result = await authenticateHospital({ email, password });
+      } catch (fbErr) {
+        try {
+          result = await api.login({ email, password });
+        } catch (apiErr) {
+          throw fbErr?.message ? fbErr : apiErr;
+        }
+      }
       const next = createSession(result);
       if (!next) {
         throw new Error('The service returned a session this portal cannot use. Contact your platform administrator.');

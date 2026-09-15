@@ -34,6 +34,14 @@ import { createDeviceRegistry } from './src/services/deviceRegistration.js';
 import { AlertNotifications } from './src/services/notificationsClient.js';
 import { createRealtimeSync } from './src/services/realtime.js';
 import { useAlerting } from './src/hooks/useAlerting.js';
+import {
+  signInOrCreateDonor,
+  updateDonorProfile,
+  updateDonorLocation,
+  subscribeDonorAssignments,
+  respondAssignment,
+  markAssignmentArrived,
+} from './src/services/firebase.js';
 
 // Demo/debug affordances (prefilled demo OTP) only ever exist in development builds.
 const DEMO_MODE = typeof __DEV__ !== 'undefined' && __DEV__;
@@ -60,95 +68,324 @@ const Button = ({ title, onPress, variant = 'primary', disabled = false }) => (
   </Pressable>
 );
 
-function SignIn({ onSignedIn }) {
-  const [phone, setPhone] = useState('');
-  const [code, setCode] = useState('');
-  const [name, setName] = useState('');
-  const [bloodType, setBloodType] = useState('O-');
-  const [dateOfBirth, setDateOfBirth] = useState('');
-  const [weightKg, setWeightKg] = useState('');
-  const [lastDonationDate, setLastDonationDate] = useState('');
-  const [sex, setSex] = useState('UNSPECIFIED');
-  const [consentAccepted, setConsentAccepted] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [serverUrl, setServerUrl] = useState(getApiUrl());
-  const [showConfig, setShowConfig] = useState(false);
+function DatePickerModal({ visible, value, onClose, onSelect, title = 'Select Date' }) {
+  const parseVal = (str) => {
+    if (!str || str === 'Never Donated') {
+      const d = new Date();
+      return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
+    }
+    const parts = String(str).split('-');
+    if (parts.length === 3) {
+      const y = parseInt(parts[0], 10) || 2026;
+      const m = parseInt(parts[1], 10) || 1;
+      const d = parseInt(parts[2], 10) || 1;
+      return { y, m, d };
+    }
+    const d = new Date();
+    return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
+  };
+
+  const initial = parseVal(value);
+  const [year, setYear] = useState(initial.y);
+  const [month, setMonth] = useState(initial.m);
+  const [day, setDay] = useState(initial.d);
 
   useEffect(() => {
-    loadApiUrl().then((url) => setServerUrl(url));
-    deviceRegistry.flush().catch(() => {});
-  }, []);
-
-  async function saveServer() {
-    try {
-      const clean = await saveApiUrl(serverUrl);
-      setServerUrl(clean);
-      Alert.alert('Server configured', `Connected to: ${clean}`);
-      setShowConfig(false);
-    } catch (err) {
-      Alert.alert('Invalid URL', err.message);
+    if (visible) {
+      const p = parseVal(value);
+      setYear(p.y);
+      setMonth(p.m);
+      setDay(p.d);
     }
-  }
+  }, [visible, value]);
 
-  async function resetServer() {
-    const restored = await resetApiUrl();
-    setServerUrl(restored);
-    Alert.alert(
-      'Server reset',
-      restored ? `Restored default: ${restored}` : 'Cleared. Enter the Pulse API URL to continue.'
-    );
-    setShowConfig(false);
-  }
+  const pad = (n) => String(n).padStart(2, '0');
+  const formatIso = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
 
-  async function sendCode() {
-    setBusy(true);
-    setError('');
-    setNotice('');
+  const setPreset = (offsetMonths) => {
+    if (offsetMonths === null) {
+      onSelect('Never Donated');
+      onClose();
+      return;
+    }
+    const d = new Date();
+    d.setMonth(d.getMonth() - offsetMonths);
+    onSelect(formatIso(d.getFullYear(), d.getMonth() + 1, d.getDate()));
+    onClose();
+  };
+
+  const applyCustom = () => {
+    onSelect(formatIso(year, month, day));
+    onClose();
+  };
+
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.pickerBackdrop}>
+        <View style={styles.pickerCard}>
+          <Text style={styles.pickerTitle}>{title}</Text>
+          <Text style={styles.pickerSub}>Quick selection or customize below</Text>
+
+          <View style={styles.presetRow}>
+            <Pressable style={styles.presetBtn} onPress={() => setPreset(null)}>
+              <Text style={styles.presetBtnText}>Never</Text>
+            </Pressable>
+            <Pressable style={styles.presetBtn} onPress={() => setPreset(0)}>
+              <Text style={styles.presetBtnText}>Today</Text>
+            </Pressable>
+            <Pressable style={styles.presetBtn} onPress={() => setPreset(3)}>
+              <Text style={styles.presetBtnText}>3 Mo Ago</Text>
+            </Pressable>
+            <Pressable style={styles.presetBtn} onPress={() => setPreset(6)}>
+              <Text style={styles.presetBtnText}>6 Mo Ago</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.stepperContainer}>
+            <View style={styles.stepperCol}>
+              <Text style={styles.stepperLabel}>Day</Text>
+              <View style={styles.stepperRow}>
+                <Pressable onPress={() => setDay((d) => Math.max(1, d - 1))} style={styles.stepBtn}>
+                  <Text style={styles.stepBtnText}>-</Text>
+                </Pressable>
+                <Text style={styles.stepVal}>{pad(day)}</Text>
+                <Pressable onPress={() => setDay((d) => Math.min(31, d + 1))} style={styles.stepBtn}>
+                  <Text style={styles.stepBtnText}>+</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.stepperCol}>
+              <Text style={styles.stepperLabel}>Month</Text>
+              <View style={styles.stepperRow}>
+                <Pressable onPress={() => setMonth((m) => Math.max(1, m - 1))} style={styles.stepBtn}>
+                  <Text style={styles.stepBtnText}>-</Text>
+                </Pressable>
+                <Text style={styles.stepVal}>{months[month - 1]}</Text>
+                <Pressable onPress={() => setMonth((m) => Math.min(12, m + 1))} style={styles.stepBtn}>
+                  <Text style={styles.stepBtnText}>+</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.stepperCol}>
+              <Text style={styles.stepperLabel}>Year</Text>
+              <View style={styles.stepperRow}>
+                <Pressable onPress={() => setYear((y) => Math.max(1950, y - 1))} style={styles.stepBtn}>
+                  <Text style={styles.stepBtnText}>-</Text>
+                </Pressable>
+                <Text style={styles.stepVal}>{year}</Text>
+                <Pressable onPress={() => setYear((y) => Math.min(2030, y + 1))} style={styles.stepBtn}>
+                  <Text style={styles.stepBtnText}>+</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.pickerActions}>
+            <Pressable onPress={onClose} style={[styles.pickerBtn, styles.pickerCancel]}>
+              <Text style={styles.pickerCancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable onPress={applyCustom} style={[styles.pickerBtn, styles.pickerApply]}>
+              <Text style={styles.pickerApplyText}>Confirm Date</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function DatePickerField({ label, value, onChange, placeholder = 'Select date' }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={{ marginBottom: 14 }}>
+      <Text style={styles.label}>{label}</Text>
+      <Pressable onPress={() => setOpen(true)} style={styles.datePickerInput}>
+        <Text style={value ? styles.datePickerValueText : styles.datePickerPlaceholderText}>
+          {value || placeholder}
+        </Text>
+        <Text style={styles.datePickerIcon}>📅</Text>
+      </Pressable>
+      <DatePickerModal
+        visible={open}
+        value={value}
+        title={label}
+        onClose={() => setOpen(false)}
+        onSelect={(val) => {
+          onChange(val);
+          setOpen(false);
+        }}
+      />
+    </View>
+  );
+}
+
+function EditProfileModal({ visible, donor, onClose, onSave }) {
+  const [name, setName] = useState(donor?.fullName || donor?.name || '');
+  const [bloodType, setBloodType] = useState(donor?.bloodType || 'O-');
+  const [weightKg, setWeightKg] = useState(String(donor?.weightKg || '68'));
+  const [age, setAge] = useState(String(donor?.age || '26'));
+  const [lastDonationDate, setLastDonationDate] = useState(donor?.lastDonationDate || 'Never Donated');
+  const [medications, setMedications] = useState(donor?.medications || 'None');
+  const [diseases, setDiseases] = useState(donor?.diseases || 'None');
+  const [isAvailable, setIsAvailable] = useState(donor?.isAvailable ?? true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (visible && donor) {
+      setName(donor.fullName || donor.name || '');
+      setBloodType(donor.bloodType || 'O-');
+      setWeightKg(String(donor.weightKg || '68'));
+      setAge(String(donor.age || '26'));
+      setLastDonationDate(donor.lastDonationDate || 'Never Donated');
+      setMedications(donor.medications || 'None');
+      setDiseases(donor.diseases || 'None');
+      setIsAvailable(donor.isAvailable ?? true);
+    }
+  }, [visible, donor]);
+
+  async function handleSave() {
+    if (!name.trim()) return Alert.alert('Required', 'Please enter your full name.');
+    setSaving(true);
     try {
-      const result = await api('/auth/donor/start', {
-        method: 'POST',
-        body: JSON.stringify({ phone: phone.trim() }),
+      await onSave({
+        fullName: name.trim(),
+        bloodType,
+        weightKg: Number(weightKg) || 68,
+        age: Number(age) || 26,
+        lastDonationDate,
+        medications: medications.trim() || 'None',
+        diseases: diseases.trim() || 'None',
+        isAvailable,
       });
-      setNotice(result.message);
-      if (result.message && result.message.includes('123456') && !code) {
-        setCode('123456');
-      }
+      onClose();
     } catch (err) {
-      setError(err.message);
+      Alert.alert('Save Failed', err.message);
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={styles.safe}>
+        <ExpoStatusBar style="dark" />
+        <ScrollView contentContainerStyle={styles.editProfileContainer}>
+          <View style={styles.editHeader}>
+            <Text style={styles.editTitle}>✏️ Edit Donor Profile</Text>
+            <Text style={styles.editSub}>Update your medical details and availability</Text>
+          </View>
+
+          <Text style={styles.label}>Full Legal Name</Text>
+          <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Your full name" />
+
+          <Text style={styles.label}>Blood Group</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeRow}>
+            {bloodTypes.map((type) => (
+              <Pressable
+                key={type}
+                onPress={() => setBloodType(type)}
+                style={[styles.typeChip, bloodType === type && styles.typeSelected]}
+              >
+                <Text style={[styles.typeText, bloodType === type && styles.typeTextSelected]}>{type}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Weight (kg)</Text>
+              <TextInput style={styles.input} value={weightKg} onChangeText={setWeightKg} keyboardType="numeric" placeholder="68" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Age</Text>
+              <TextInput style={styles.input} value={age} onChangeText={setAge} keyboardType="numeric" placeholder="26" />
+            </View>
+          </View>
+
+          <DatePickerField label="Last Whole-Blood Donation" value={lastDonationDate} onChange={setLastDonationDate} />
+
+          <Text style={styles.label}>Current Medications</Text>
+          <TextInput style={styles.input} value={medications} onChangeText={setMedications} placeholder="None, or list medications" />
+
+          <Text style={styles.label}>Medical Conditions / Infections</Text>
+          <TextInput style={styles.input} value={diseases} onChangeText={setDiseases} placeholder="None, or specify" />
+
+          <View style={[styles.availabilityRow, { marginVertical: 12 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.availabilityTitle}>Available for Alerts</Text>
+              <Text style={styles.availabilitySub}>Turn off temporarily if travelling or unwell</Text>
+            </View>
+            <Switch
+              value={isAvailable}
+              onValueChange={setIsAvailable}
+              trackColor={{ false: '#dce2e8', true: '#f9a3a9' }}
+              thumbColor={isAvailable ? '#e93f4e' : '#fff'}
+            />
+          </View>
+
+          <View style={{ marginTop: 20, gap: 10 }}>
+            <Button title={saving ? 'Saving...' : 'Save Profile Changes'} onPress={handleSave} disabled={saving} />
+            <Button title="Cancel" variant="plain" onPress={onClose} disabled={saving} />
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+function SignIn({ onSignedIn }) {
+  const [phone, setPhone] = useState('');
+  const [name, setName] = useState('');
+  const [bloodType, setBloodType] = useState('O-');
+  const [dateOfBirth, setDateOfBirth] = useState('1998-05-12');
+  const [weightKg, setWeightKg] = useState('68');
+  const [lastDonationDate, setLastDonationDate] = useState('Never Donated');
+  const [sex, setSex] = useState('UNSPECIFIED');
+  const [consentAccepted, setConsentAccepted] = useState(true);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  function fillPreset(pPhone, pName, pBlood) {
+    setPhone(pPhone);
+    setName(pName);
+    setBloodType(pBlood);
+    setError('');
   }
 
   async function submit() {
-    if (!phone.trim()) return setError('Enter your mobile number.');
-    if (!code.trim()) return setError('Enter the one-time code sent to your phone.');
+    const cleanPhone = phone.trim();
+    if (!cleanPhone || cleanPhone.length < 6) {
+      return setError('Please enter a valid mobile number.');
+    }
     if (!consentAccepted) {
       return setError('Consent to emergency-alert matching is required before continuing.');
     }
     setBusy(true);
     setError('');
     try {
-      const session = await api('/auth/donor/verify', {
-        method: 'POST',
-        body: JSON.stringify({
-          phone: phone.trim(),
-          code: code.trim(),
-          fullName: name || undefined,
-          bloodType,
-          dateOfBirth,
-          weightKg: Number(weightKg) || undefined,
-          lastDonationDate,
-          sex,
-          consentAccepted,
-        }),
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null);
+      const loc = pos?.coords ? { latitude: pos.coords.latitude, longitude: pos.coords.longitude } : null;
+
+      const session = await signInOrCreateDonor({
+        phone: cleanPhone,
+        fullName: name.trim() || 'Volunteer Donor',
+        bloodType,
+        weightKg: Number(weightKg) || 68,
+        age: 26,
+        lastDonationDate: lastDonationDate || 'Never Donated',
+        location: loc,
       });
-      await saveDonorPhone(phone.trim());
+
+      await saveDonorPhone(cleanPhone);
+      await saveSession(session);
+      activeToken = session.token;
       await onSignedIn(session);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Sign in failed. Check your network connection.');
     } finally {
       setBusy(false);
     }
@@ -167,23 +404,37 @@ function SignIn({ onSignedIn }) {
           <Text style={styles.signText}>
             Join a verified local donor network ready to help in a critical emergency.
           </Text>
-          {serverUrl ? null : (
-            <View style={styles.warningBadge}>
-              <Text style={styles.warningBadgeText}>
-                No API endpoint configured for this build. Open Server Settings below to enter your Pulse API URL.
-              </Text>
-            </View>
-          )}
         </View>
 
         <View style={styles.signForm}>
-          <Text style={styles.formTitle}>Donor sign in or register</Text>
+          <Text style={styles.formTitle}>Instant Donor Sign-In</Text>
           <Text style={styles.formSub}>
-            Existing donors need only their phone and verification code. New donors complete their
-            safety profile below.
+            Direct Firebase authentication without SMS OTP delay. Enter your details to start.
           </Text>
 
-          <Text style={styles.label}>Mobile number</Text>
+          <Text style={styles.label}>Quick donor profiles</Text>
+          <View style={[styles.typeRow, { marginBottom: 16 }]}>
+            <Pressable
+              style={styles.typeChip}
+              onPress={() => fillPreset('+91-9900000001', 'Arjun Menon', 'O-')}
+            >
+              <Text style={styles.typeText}>Arjun (O-)</Text>
+            </Pressable>
+            <Pressable
+              style={styles.typeChip}
+              onPress={() => fillPreset('+91-9988776655', 'Dr. Preethi Nair', 'O+')}
+            >
+              <Text style={styles.typeText}>Preethi (O+)</Text>
+            </Pressable>
+            <Pressable
+              style={styles.typeChip}
+              onPress={() => fillPreset('+91-8714743183', 'Anjo M J', 'O-')}
+            >
+              <Text style={styles.typeText}>Anjo (O-)</Text>
+            </Pressable>
+          </View>
+
+          <Text style={styles.label}>Mobile number *</Text>
           <TextInput
             value={phone}
             onChangeText={setPhone}
@@ -192,30 +443,9 @@ function SignIn({ onSignedIn }) {
             placeholder="+91 90000 00000"
             autoCapitalize="none"
           />
-          <Button
-            title={busy ? 'Sending...' : 'Send verification code'}
-            variant="outline"
-            onPress={sendCode}
-            disabled={busy}
-          />
-
-          <Text style={styles.label}>One-time code</Text>
-          <TextInput
-            value={code}
-            onChangeText={setCode}
-            style={styles.input}
-            keyboardType="number-pad"
-            placeholder="6-digit code"
-          />
-          {DEMO_MODE ? (
-            <Text style={styles.hint}>
-              Development build: the API accepts the fixed demo code 123456 for test numbers.
-            </Text>
-          ) : null}
-          {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
           <View style={styles.registration}>
-            <Text style={styles.registrationTitle}>New donor medical profile</Text>
+            <Text style={styles.registrationTitle}>Donor details</Text>
             <Text style={styles.label}>Full legal name</Text>
             <TextInput
               value={name}
@@ -223,6 +453,7 @@ function SignIn({ onSignedIn }) {
               style={styles.input}
               placeholder="Your full name"
             />
+
             <Text style={styles.label}>Blood group</Text>
             <ScrollView
               horizontal
@@ -241,109 +472,66 @@ function SignIn({ onSignedIn }) {
                 </Pressable>
               ))}
             </ScrollView>
-            <Text style={styles.label}>Date of birth</Text>
-            <TextInput
+
+            <DatePickerField
+              label="Date of birth"
               value={dateOfBirth}
-              onChangeText={setDateOfBirth}
-              style={styles.input}
-              placeholder="YYYY-MM-DD"
+              onChange={setDateOfBirth}
+              placeholder="Select birth date"
             />
-            <Text style={styles.label}>Weight in kilograms</Text>
-            <TextInput
-              value={weightKg}
-              onChangeText={setWeightKg}
-              style={styles.input}
-              placeholder="e.g. 62"
-              keyboardType="decimal-pad"
-            />
-            <Text style={styles.label}>Last whole-blood donation</Text>
-            <TextInput
-              value={lastDonationDate}
-              onChangeText={setLastDonationDate}
-              style={styles.input}
-              placeholder="YYYY-MM-DD"
-            />
-            <Text style={styles.label}>Sex</Text>
-            <View style={styles.sexRow}>
-              {['FEMALE', 'MALE', 'UNSPECIFIED'].map((value) => (
-                <Pressable
-                  key={value}
-                  onPress={() => setSex(value)}
-                  style={[styles.sexChip, sex === value && styles.sexSelected]}
-                >
-                  <Text style={[styles.sexText, sex === value && styles.sexTextSelected]}>
-                    {value[0] + value.slice(1).toLowerCase()}
-                  </Text>
-                </Pressable>
-              ))}
+
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Weight (kg)</Text>
+                <TextInput
+                  value={weightKg}
+                  onChangeText={setWeightKg}
+                  style={styles.input}
+                  placeholder="68"
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Sex</Text>
+                <View style={[styles.sexRow, { marginTop: 4 }]}>
+                  {['FEMALE', 'MALE'].map((value) => (
+                    <Pressable
+                      key={value}
+                      onPress={() => setSex(value)}
+                      style={[styles.sexChip, sex === value && styles.sexSelected]}
+                    >
+                      <Text style={[styles.sexText, sex === value && styles.sexTextSelected]}>
+                        {value === 'FEMALE' ? 'F' : 'M'}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
             </View>
+
+            <DatePickerField
+              label="Last whole-blood donation"
+              value={lastDonationDate}
+              onChange={setLastDonationDate}
+              placeholder="Select date or Never Donated"
+            />
+
             <Pressable style={styles.consent} onPress={() => setConsentAccepted((value) => !value)}>
               <View style={[styles.check, consentAccepted && styles.checked]}>
-                {consentAccepted && <Text style={styles.checkText}>+</Text>}
+                {consentAccepted && <Text style={styles.checkText}>✓</Text>}
               </View>
               <Text style={styles.consentText}>
-                I consent to emergency-alert matching and confirm these medical details are accurate.
+                I confirm these details are accurate and consent to emergency blood matching.
               </Text>
             </Pressable>
           </View>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Button
-            title={busy ? 'Signing in...' : 'Continue as donor'}
+            title={busy ? 'Connecting to network...' : 'Continue as donor →'}
             onPress={submit}
             disabled={busy}
           />
-
-          <Pressable onPress={() => setShowConfig((value) => !value)} style={styles.configToggle}>
-            <Text style={styles.configToggleText}>
-              {showConfig ? 'Hide Server Settings' : 'Server Settings'}
-            </Text>
-          </Pressable>
-
-          {showConfig && (
-            <View style={styles.configPanel}>
-              <Text style={styles.configTitle}>Pulse API endpoint</Text>
-              <TextInput
-                value={serverUrl}
-                onChangeText={setServerUrl}
-                style={[styles.input, styles.configInput]}
-                autoCapitalize="none"
-                placeholder="http://192.168.1.5:4000"
-              />
-              <Text style={[styles.label, { marginTop: 4, marginBottom: 6 }]}>Quick presets</Text>
-              <View style={[styles.typeRow, { marginBottom: 12 }]}>
-                <Pressable
-                  onPress={() => setServerUrl('http://192.168.1.5:4000')}
-                  style={[styles.typeChip, serverUrl === 'http://192.168.1.5:4000' && styles.typeSelected]}
-                >
-                  <Text style={[styles.typeText, serverUrl === 'http://192.168.1.5:4000' && styles.typeTextSelected]}>
-                    Wi-Fi (192.168.1.5)
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => setServerUrl('http://10.0.2.2:4000')}
-                  style={[styles.typeChip, serverUrl === 'http://10.0.2.2:4000' && styles.typeSelected]}
-                >
-                  <Text style={[styles.typeText, serverUrl === 'http://10.0.2.2:4000' && styles.typeTextSelected]}>
-                    Emulator (10.0.2.2)
-                  </Text>
-                </Pressable>
-              </View>
-              <View style={styles.configButtons}>
-                <View style={styles.flex}>
-                  <Button title="Save" onPress={saveServer} />
-                </View>
-                <View style={styles.flex}>
-                  <Button title="Reset" variant="outline" onPress={resetServer} />
-                </View>
-              </View>
-            </View>
-          )}
-
-          <Text style={styles.privacy}>
-            Your information is screened by the matching engine. Hospital staff conduct the final
-            clinical eligibility assessment.
-          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -503,7 +691,11 @@ function Screening({ alertItem, token, onDone, onCancel }) {
     }
     setBusy(true);
     try {
-      await api(`/donor/assignments/${alertItem.id}/respond`, { method: 'POST', body: JSON.stringify({ response: 'ACCEPT' }) }, token);
+      if (token?.startsWith('firebase.') || !token) {
+        await respondAssignment(alertItem.id, 'ACCEPT');
+      } else {
+        await api(`/donor/assignments/${alertItem.id}/respond`, { method: 'POST', body: JSON.stringify({ response: 'ACCEPT' }) }, token);
+      }
       onDone();
     } catch (err) {
       Alert.alert('Unable to accept', err.message);
@@ -563,7 +755,11 @@ function Arrival({ assignment, token, refresh }) {
 
   async function markArrival() {
     try {
-      await api(`/donor/assignments/${assignment.id}/arrive`, { method: 'POST' }, token);
+      if (token?.startsWith('firebase.') || !token) {
+        await markAssignmentArrived(assignment.id);
+      } else {
+        await api(`/donor/assignments/${assignment.id}/arrive`, { method: 'POST' }, token);
+      }
       setArrived(true);
       refresh();
     } catch (err) {
@@ -602,6 +798,7 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
   const [screening, setScreening] = useState(null);
   const [incomingCallAlert, setIncomingCallAlert] = useState(null);
   const [dismissedAlertIds, setDismissedAlertIds] = useState(() => new Set());
+  const [editProfileOpen, setEditProfileOpen] = useState(false);
 
   const [realtimeNonce, setRealtimeNonce] = useState(0);
   const realtimeRef = useRef(null);
@@ -638,6 +835,56 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
       console.log(`Refresh skipped: ${err.message}`);
     }
   }, [token]);
+
+  // Real-time Firestore sync for incoming emergency assignments
+  useEffect(() => {
+    if (!donor?.id) return undefined;
+    const unsubscribe = subscribeDonorAssignments(donor.id, (firebaseAlerts) => {
+      if (Array.isArray(firebaseAlerts) && firebaseAlerts.length > 0) {
+        setAlerts((prev) => {
+          const map = new Map();
+          prev.forEach((a) => map.set(a.id, a));
+          firebaseAlerts.forEach((a) => map.set(a.id, a));
+          return Array.from(map.values());
+        });
+      }
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, [donor?.id]);
+
+  // Real-time high-accuracy GPS tracking when responding or en-route to an emergency
+  useEffect(() => {
+    const activeAssignment = alerts.find((item) => ['ACCEPTED', 'ARRIVED'].includes(item.status));
+    if (!activeAssignment || !donor?.id) return undefined;
+    let locationSub = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { status: permStatus } = await Location.requestForegroundPermissionsAsync();
+        if (permStatus !== 'granted' || cancelled) return;
+        locationSub = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 4000,
+            distanceInterval: 10,
+          },
+          (loc) => {
+            if (loc?.coords && !cancelled) {
+              updateDonorLocation(donor.id, loc.coords.latitude, loc.coords.longitude).catch(() => {});
+            }
+          }
+        );
+      } catch (err) {
+        console.warn('GPS tracking error:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      locationSub?.remove?.();
+    };
+  }, [alerts, donor?.id]);
 
   const syncLocation = useCallback(async () => {
     try {
@@ -755,11 +1002,15 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
     setDismissedAlertIds((prev) => new Set(prev).add(item.id));
     if (!item.isSimulated) {
       try {
-        await api(
-          `/donor/assignments/${item.id}/respond`,
-          { method: 'POST', body: JSON.stringify({ response: 'DECLINE' }) },
-          token
-        );
+        if (token?.startsWith('firebase.') || !token) {
+          await respondAssignment(item.id, 'DECLINE');
+        } else {
+          await api(
+            `/donor/assignments/${item.id}/respond`,
+            { method: 'POST', body: JSON.stringify({ response: 'DECLINE' }) },
+            token
+          );
+        }
       } catch (err) {
         console.warn('Decline error:', err.message);
       }
@@ -888,6 +1139,12 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
               {donor?.eligible ? 'Eligible to donate' : 'Donation cooldown active'}
             </Text>
           </View>
+          <Pressable
+            style={styles.editBadge}
+            onPress={() => setEditProfileOpen(true)}
+          >
+            <Text style={styles.editBadgeText}>✏️ Edit</Text>
+          </Pressable>
         </View>
 
         <View style={styles.availability}>
@@ -978,6 +1235,16 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
         alertItem={incomingCallAlert}
         onAccept={() => handleAcceptCall(incomingCallAlert)}
         onDecline={() => handleDeclineCall(incomingCallAlert)}
+      />
+
+      <EditProfileModal
+        visible={editProfileOpen}
+        donor={donor}
+        onClose={() => setEditProfileOpen(false)}
+        onSaved={(updated) => {
+          setDonor((prev) => ({ ...prev, ...donorView(updated) }));
+          refresh();
+        }}
       />
     </SafeAreaView>
   );
@@ -1208,6 +1475,39 @@ const styles = StyleSheet.create({
   qrBox: { alignItems: 'center', padding: 14, backgroundColor: '#f7fafc', borderRadius: 12, marginBottom: 12 },
   qrHint: { fontSize: 11, color: '#6c7f90', marginTop: 8, textAlign: 'center' },
   caution: { fontSize: 11, color: '#8b98a5', lineHeight: 17, marginTop: 12, textAlign: 'center' },
+  datePickerInput: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#d3dde6', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  datePickerValueText: { fontSize: 15, color: '#0e2433', fontWeight: '600' },
+  datePickerPlaceholderText: { fontSize: 15, color: '#9bb2c5' },
+  datePickerIcon: { fontSize: 18 },
+  editBadge: { backgroundColor: '#edf2f7', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: '#d3dde6' },
+  editBadgeText: { fontSize: 12, fontWeight: '700', color: '#17354c' },
+  pickerBackdrop: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.55)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  pickerCard: { width: '100%', maxWidth: 360, backgroundColor: '#fff', borderRadius: 16, padding: 20, elevation: 10 },
+  pickerTitle: { fontSize: 18, fontWeight: '800', color: '#0e2433', textAlign: 'center' },
+  pickerSub: { fontSize: 12.5, color: '#687d91', textAlign: 'center', marginTop: 3, marginBottom: 16 },
+  presetRow: { flexDirection: 'row', gap: 6, marginBottom: 18, flexWrap: 'wrap', justifyContent: 'center' },
+  presetBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, backgroundColor: '#f0f4f8', borderWidth: 1, borderColor: '#d3dde6' },
+  presetBtnText: { fontSize: 12, fontWeight: '700', color: '#273849' },
+  stepperContainer: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 10 },
+  stepperCol: { alignItems: 'center', flex: 1 },
+  stepperLabel: { fontSize: 12, fontWeight: '700', color: '#687d91', marginBottom: 6 },
+  stepperRow: { alignItems: 'center' },
+  stepBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#edf2f7', alignItems: 'center', justifyContent: 'center', marginVertical: 4 },
+  stepBtnText: { fontSize: 20, fontWeight: '800', color: '#0e2433' },
+  stepVal: { fontSize: 16, fontWeight: '800', color: '#0e2433', marginVertical: 4 },
+  pickerActions: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  pickerBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+  pickerCancel: { backgroundColor: '#f0f4f8' },
+  pickerCancelText: { color: '#4a5b6d', fontWeight: '700', fontSize: 14 },
+  pickerApply: { backgroundColor: '#e93f4e' },
+  pickerApplyText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  editProfileContainer: { padding: 20, paddingBottom: 40 },
+  editHeader: { marginBottom: 20 },
+  editTitle: { fontSize: 22, fontWeight: '800', color: '#0e2433' },
+  editSub: { fontSize: 13, color: '#687d91', marginTop: 4 },
+  availabilityRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 14, borderRadius: 10, borderWidth: 1, borderColor: '#e1e8ef' },
+  availabilityTitle: { fontSize: 15, fontWeight: '700', color: '#0e2433' },
+  availabilitySub: { fontSize: 12, color: '#687d91', marginTop: 2 },
   callSimulatorButton: { backgroundColor: '#e93f4e', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 16, elevation: 4, shadowColor: '#e93f4e', shadowRadius: 8, shadowOpacity: 0.5 },
   callSimulatorButtonText: { color: '#ffffff', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 },
   callShell: { flex: 1, backgroundColor: '#091824', justifyContent: 'space-between' },

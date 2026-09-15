@@ -14,6 +14,7 @@ import { isUnauthorizedError } from '../lib/api.js';
 import { POLL_STATUS } from '../lib/poller.js';
 import { filterRequests, mergeRequestUpdate, normalizeRequest, sortRequests, summarize } from '../lib/lifecycle.js';
 import { formatRemaining, sessionRemainingMs } from '../lib/session.js';
+import { createEmergencyRequestDoc, checkInDonorDesk } from '../lib/firebase.js';
 
 const FEED_INTERVAL_MS = 4000;
 const FILTERS = [
@@ -86,6 +87,31 @@ export default function Dashboard({ api, session, onSignOut, onUnauthorized }) {
 
   const createRequest = useCallback(
     async (payload) => {
+      if (session.token?.includes('.firebase')) {
+        const created = await createEmergencyRequestDoc({
+          hospital: session.hospital,
+          bloodType: payload.bloodType,
+          unitsNeeded: payload.unitsNeeded,
+          urgency: payload.urgency,
+        });
+        const normalized = normalizeRequest({
+          id: created.id,
+          bloodType: created.blood_type,
+          unitsNeeded: created.units_required,
+          urgency: created.urgency,
+          status: 'DISPATCHING',
+          currentRadiusKm: created.current_radius_km,
+          createdAt: created.created_at,
+          assignments: [],
+        });
+        feed.setRequests((previous) => [normalized, ...previous.filter((request) => request.id !== normalized.id)]);
+        setFilter('active');
+        focusRequestCard(normalized.id);
+        push('Emergency request broadcast to Firebase network. Donors are being alerted.', { tone: 'success' });
+        feed.refreshNow();
+        return normalized;
+      }
+
       const created = await guard(() => api.createRequest(session.token, payload));
       const normalized = normalizeRequest(created);
       if (normalized.id) {
@@ -97,7 +123,7 @@ export default function Dashboard({ api, session, onSignOut, onUnauthorized }) {
       feed.refreshNow();
       return normalized;
     },
-    [api, feed, guard, push, session.token],
+    [api, feed, guard, push, session.token, session.hospital],
   );
 
   const escalate = useCallback(
@@ -142,6 +168,13 @@ export default function Dashboard({ api, session, onSignOut, onUnauthorized }) {
 
   const checkIn = useCallback(
     async (tokenValue) => {
+      if (session.token?.includes('.firebase')) {
+        const response = await checkInDonorDesk({ token: tokenValue, arrivalOtp: tokenValue });
+        push(`Arrival verified for ${response.donorName} (${response.bloodType}).`, { tone: 'success' });
+        feed.refreshNow();
+        return response;
+      }
+
       const response = await guard(() => api.checkIn(session.token, tokenValue));
       push(
         response?.alreadyCompleted
