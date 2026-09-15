@@ -41,7 +41,9 @@ import {
   subscribeDonorAssignments,
   respondAssignment,
   markAssignmentArrived,
+  db,
 } from './src/services/firebase.js';
+import { doc, getDoc } from 'firebase/firestore';
 import { OverlayService } from './src/services/overlayPermission.js';
 
 // Demo/debug affordances (prefilled demo OTP) only ever exist in development builds.
@@ -897,6 +899,16 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
 
   const refresh = useCallback(async () => {
     try {
+      if (token?.startsWith('firebase.') || !token) {
+        if (donor?.id) {
+          const snap = await getDoc(doc(db, 'donors', donor.id));
+          if (snap.exists()) {
+            const data = snap.data();
+            setDonor((prev) => ({ ...prev, ...data, fullName: data.full_name || prev.fullName }));
+          }
+        }
+        return;
+      }
       const [profile, nextAlerts] = await Promise.all([
         api('/donor/me', {}, token),
         api('/donor/alerts', {}, token),
@@ -906,16 +918,15 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
     } catch (err) {
       console.log(`Refresh skipped: ${err.message}`);
     }
-  }, [token]);
+  }, [token, donor?.id]);
 
   // Real-time Firestore sync for incoming emergency assignments
   useEffect(() => {
-    if (!donor?.id) return undefined;
-    const unsubscribe = subscribeDonorAssignments(donor.id, (firebaseAlerts) => {
-      if (Array.isArray(firebaseAlerts) && firebaseAlerts.length > 0) {
+    if (!donor?.id && !donor?.phone) return undefined;
+    const unsubscribe = subscribeDonorAssignments(donor, (firebaseAlerts) => {
+      if (Array.isArray(firebaseAlerts)) {
         setAlerts((prev) => {
           const map = new Map();
-          prev.forEach((a) => map.set(a.id, a));
           firebaseAlerts.forEach((a) => map.set(a.id, a));
           return Array.from(map.values());
         });
@@ -924,7 +935,7 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
     return () => {
       unsubscribe?.();
     };
-  }, [donor?.id]);
+  }, [donor?.id, donor?.phone]);
 
   // Real-time high-accuracy GPS tracking when responding or en-route to an emergency
   useEffect(() => {

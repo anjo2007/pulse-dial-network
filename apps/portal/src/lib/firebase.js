@@ -143,6 +143,22 @@ export function subscribeDonors(onUpdate, onError) {
   );
 }
 
+export function normalizePhoneDigits(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
+export const COMPATIBLE_DONORS = {
+  'O-': ['O-'],
+  'O+': ['O-', 'O+'],
+  'A-': ['O-', 'A-'],
+  'A+': ['O-', 'O+', 'A-', 'A+'],
+  'B-': ['O-', 'B-'],
+  'B+': ['O-', 'O+', 'B-', 'B+'],
+  'AB-': ['O-', 'A-', 'B-', 'AB-'],
+  'AB+': ['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'],
+};
+
 /**
  * Create a new emergency request directly in Firestore.
  */
@@ -171,17 +187,6 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
 
   await setDoc(doc(db, 'emergency_requests', id), data);
 
-const COMPATIBLE_DONORS = {
-  'O-': ['O-'],
-  'O+': ['O-', 'O+'],
-  'A-': ['O-', 'A-'],
-  'A+': ['O-', 'O+', 'A-', 'A+'],
-  'B-': ['O-', 'B-'],
-  'B+': ['O-', 'O+', 'B-', 'B+'],
-  'AB-': ['O-', 'A-', 'B-', 'AB-'],
-  'AB+': ['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'],
-};
-
   // Auto-match nearby available donors
   try {
     const donorsRef = collection(db, 'donors');
@@ -199,24 +204,30 @@ const COMPATIBLE_DONORS = {
       if (compatibleList.includes(dBlood)) {
         const asgnId = 'asgn_' + id + '_' + donorId;
         const arrivalOtp = String(Math.floor(100000 + Math.random() * 900000));
+        const donorPhone = donor.phone || '';
         const asgnData = {
           id: asgnId,
           request_id: id,
           donor_id: donorId,
           donor_name: donor.full_name || donor.name || 'Volunteer Donor',
-          donor_phone: donor.phone || '',
+          donor_phone: donorPhone,
+          donor_phone_digits: normalizePhoneDigits(donorPhone),
           blood_type: dBlood,
-          distance_km: 1.2,
+          distance_km: Number(donor.distance_km || 1.2),
           distance_meters: 1200,
           status: 'PINGED',
           priority_score: 0.95,
           arrival_otp: arrivalOtp,
           qr_token: 'QR_' + now + '_' + donorId.substring(0, 5),
+          hospital_name: hospital.name || 'Emergency Medical Centre',
+          hospital_id: hospital.id,
+          request_blood_type: bloodType,
+          units_required: Number(unitsNeeded) || 1,
+          urgency,
           created_at: new Date(now).toISOString()
         };
         await setDoc(doc(db, 'dispatch_assignments', asgnId), asgnData);
         matched++;
-        if (matched >= (Number(unitsNeeded) || 1) * 3) break;
       }
     }
   } catch (err) {

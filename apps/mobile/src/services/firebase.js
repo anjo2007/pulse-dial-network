@@ -24,6 +24,11 @@ export const firebaseConfig = {
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 
+export function normalizePhoneDigits(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
 /**
  * Streamlined Donor Sign-In or Registration without OTP friction.
  * Accepts donor phone and details, immediately sets up / restores the donor in Firestore.
@@ -39,39 +44,63 @@ export async function signInOrCreateDonor({
   lastDonationDate = 'Never Donated',
   location = null
 }) {
-  const cleanPhone = String(phone || '').trim().replace(/[^0-9+]/g, '');
-  if (!cleanPhone || cleanPhone.length < 6) {
+  const rawClean = String(phone || '').trim().replace(/[^0-9+]/g, '');
+  const digits = normalizePhoneDigits(rawClean);
+  if (!digits || digits.length < 6) {
     throw new Error('Please enter a valid mobile phone number.');
   }
 
   const donorsRef = collection(db, 'donors');
-  const q = query(donorsRef, where('phone', '==', cleanPhone));
-  const snap = await getDocs(q);
+  const snap = await getDocs(donorsRef);
+
+  let donorDocMatch = null;
+  for (const docSnap of snap.docs) {
+    const data = docSnap.data();
+    if (normalizePhoneDigits(data.phone) === digits) {
+      donorDocMatch = docSnap;
+      break;
+    }
+  }
 
   let donorId;
   let donorData;
 
-  if (!snap.empty) {
-    donorId = snap.docs[0].id;
-    donorData = snap.docs[0].data();
-    // Update location if available
-    if (location?.latitude && location?.longitude) {
-      await updateDoc(doc(db, 'donors', donorId), {
-        lat: Number(location.latitude),
-        lon: Number(location.longitude),
-        is_available: true
-      });
-      donorData.lat = location.latitude;
-      donorData.lon = location.longitude;
-      donorData.is_available = true;
+  if (donorDocMatch) {
+    donorId = donorDocMatch.id;
+    donorData = donorDocMatch.data();
+    // Update availability, blood type, phone digits, and location
+    const updates = {
+      is_available: true,
+      phone_digits: digits,
+    };
+    if (bloodType) {
+      updates.blood_type = bloodType;
+      donorData.blood_type = bloodType;
     }
+    if (fullName && fullName !== 'Volunteer Donor') {
+      updates.full_name = fullName;
+      donorData.full_name = fullName;
+    }
+    if (weightKg) updates.weight_kg = Number(weightKg) || donorData.weight_kg || 68;
+    if (age) updates.age = Number(age) || donorData.age || 26;
+    if (lastDonationDate) updates.last_donation_date = lastDonationDate;
+    if (location?.latitude && location?.longitude) {
+      updates.lat = Number(location.latitude);
+      updates.lon = Number(location.longitude);
+      donorData.lat = updates.lat;
+      donorData.lon = updates.lon;
+    }
+    await updateDoc(doc(db, 'donors', donorId), updates);
+    donorData.is_available = true;
+    donorData.phone_digits = digits;
   } else {
-    // Generate clean donor ID based on phone or random key
-    donorId = 'donor_' + cleanPhone.replace(/\+/g, '');
+    // Generate clean donor ID based on digits
+    donorId = 'donor_' + digits;
     donorData = {
       id: donorId,
       full_name: fullName,
-      phone: cleanPhone,
+      phone: rawClean,
+      phone_digits: digits,
       blood_type: bloodType,
       weight_kg: Number(weightKg) || 68,
       age: Number(age) || 26,
@@ -90,7 +119,8 @@ export async function signInOrCreateDonor({
   const tokenPayload = {
     sub: donorId,
     role: 'donor',
-    phone: cleanPhone,
+    phone: rawClean,
+    phone_digits: digits,
     bloodType: donorData.blood_type || bloodType,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 30 * 24 * 3600
@@ -102,7 +132,8 @@ export async function signInOrCreateDonor({
     donor: {
       id: donorId,
       fullName: donorData.full_name || fullName,
-      phone: cleanPhone,
+      phone: donorData.phone || rawClean,
+      phone_digits: digits,
       bloodType: donorData.blood_type || bloodType,
       weightKg: donorData.weight_kg || weightKg,
       age: donorData.age || age,
@@ -156,31 +187,44 @@ export async function updateDonorLocation(donorId, lat, lon) {
 
 /**
  * Real-time listener for incoming assignments for this donor.
+ * Robustly matches by donor ID or normalized phone digits.
  */
-export function subscribeDonorAssignments(donorId, onAssignments) {
+export function subscribeDonorAssignments(donorOrId, onAssignments) {
+  const donorId = typeof donorOrId === 'string' ? donorOrId : donorOrId?.id;
+  const donorPhone = typeof donorOrId === 'object' ? donorOrId?.phone : '';
+  const donorDigits = normalizePhoneDigits(donorPhone);
+
   const asgnsRef = collection(db, 'dispatch_assignments');
-  const q = query(asgnsRef, where('donor_id', '==', donorId));
 
   return onSnapshot(
-    q,
+    asgnsRef,
     (snapshot) => {
       const list = [];
       snapshot.forEach((d) => {
         const item = d.data();
-        list.push({
-          id: d.id,
-          requestId: item.request_id,
-          status: item.status,
-          distanceKm: item.distance_km || 1.2,
-          arrivalOtp: item.arrival_otp,
-          checkinToken: item.qr_token || ('QR_' + d.id),
-          tier: item.tier || 1,
-          request: {
-            bloodType: item.blood_type || 'O-',
-            unitsNeeded: 1,
-            hospitalName: item.hospital_name || 'Central City Medical Centre'
-          }
-        });
+        const asgnDonorId = item.donor_id;
+        const asgnPhoneDigits = normalizePhoneDigits(item.donor_phone || item.donor_phone_digits);
+
+        const isMatch =
+          (donorId && asgnDonorId === donorId) ||
+          (donorDigits && asgnPhoneDigits && asgnPhoneDigits === donorDigits);
+
+        if (isMatch) {
+          list.push({
+            id: d.id,
+            requestId: item.request_id,
+            status: item.status,
+            distanceKm: item.distance_km || 1.2,
+            arrivalOtp: item.arrival_otp,
+            checkinToken: item.qr_token || ('QR_' + d.id),
+            tier: item.tier || 1,
+            request: {
+              bloodType: item.request_blood_type || item.blood_type || 'O-',
+              unitsNeeded: item.units_required || 1,
+              hospitalName: item.hospital_name || 'Emergency Medical Centre'
+            }
+          });
+        }
       });
       onAssignments(list);
     },

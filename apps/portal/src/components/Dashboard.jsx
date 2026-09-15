@@ -7,6 +7,7 @@ import Toasts from './Toasts.jsx';
 import { InlineError, SkeletonBlock } from './ui.jsx';
 import { useCapabilities } from '../hooks/useCapabilities.js';
 import { useRealtimeInvalidation } from '../hooks/useRealtimeInvalidation.js';
+import { SYNC_STATUS } from '../lib/sync.js';
 import { useRequestsFeed } from '../hooks/useRequestsFeed.js';
 import { useTicker } from '../hooks/useTicker.js';
 import { useToasts } from '../hooks/useToasts.js';
@@ -52,9 +53,26 @@ export default function Dashboard({ api, session, onSignOut, onUnauthorized }) {
     refreshKey: feed.initialLoaded ? 'ready' : 'pending',
   });
 
-  // Optional realtime invalidation. Broadcast signals carry no data - they only mean
-  // "refetch" - and polling keeps running underneath as the guaranteed transport.
-  const realtime = useRealtimeInvalidation({ api, token: session.token, onInvalidate: feed.refreshNow });
+  const isFirebase = Boolean(session.token?.includes('.firebase'));
+  const fallbackRealtime = useRealtimeInvalidation({
+    api,
+    token: isFirebase ? null : session.token,
+    onInvalidate: feed.refreshNow,
+    enabled: !isFirebase,
+  });
+
+  const realtime = useMemo(() => {
+    if (isFirebase) {
+      return {
+        status: SYNC_STATUS.subscribed,
+        hint: '',
+        label: 'Realtime',
+        detail: 'Direct real-time Firestore synchronization active across hospitals and donors.',
+        enabled: true,
+      };
+    }
+    return fallbackRealtime;
+  }, [isFirebase, fallbackRealtime]);
 
   const guard = useCallback(
     async (task) => {
