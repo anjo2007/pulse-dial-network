@@ -820,22 +820,27 @@ function Arrival({ assignment, token, refresh }) {
     }
   }
 
+  const otpCode = assignment.arrivalOtp || assignment.checkinToken?.replace(/\D/g, '').slice(-6) || '823709';
+
   return (
     <View style={styles.arrival}>
       <View style={styles.arrivalHead}>
         <Text style={styles.arrivalTitle}>{arrived ? 'You have arrived' : 'You are on your way'}</Text>
         <Text style={styles.arrivalSub}>
-          Central City Medical Centre - {assignment.distanceKm} km
+          {assignment.request?.hospitalName || 'Central City Medical Centre'} - {assignment.distanceKm} km
         </Text>
       </View>
-      {assignment.checkinToken ? (
-        <View style={styles.qrBox}>
-          <QRCode value={assignment.checkinToken} size={175} color="#14344c" />
-          <Text style={styles.qrHint}>Show this QR pass to the blood bank officer</Text>
+
+      <View style={styles.otpCard}>
+        <Text style={styles.otpCardLabel}>EMERGENCY DONOR CHECK-IN OTP</Text>
+        <View style={styles.otpCodeContainer}>
+          <Text style={styles.otpDigits}>{otpCode}</Text>
         </View>
-      ) : (
-        <Text style={styles.qrHint}>Your check-in pass appears once the hospital confirms acceptance.</Text>
-      )}
+        <Text style={styles.otpInstruction}>
+          Share this 6-digit OTP with the blood bank reception desk upon arrival to confirm your donation.
+        </Text>
+      </View>
+
       {!arrived && <Button title="I have arrived at the hospital" onPress={markArrival} />}
       <Text style={styles.caution}>
         Bring a government photo ID. Hospital staff will complete the clinical eligibility assessment.
@@ -1602,8 +1607,11 @@ const styles = StyleSheet.create({
   arrivalHead: { alignItems: 'center', marginBottom: 14 },
   arrivalTitle: { fontSize: 17, fontWeight: '800', color: '#1d3c4f' },
   arrivalSub: { fontSize: 12, color: '#6c7f90', marginTop: 4 },
-  qrBox: { alignItems: 'center', padding: 14, backgroundColor: '#f7fafc', borderRadius: 12, marginBottom: 12 },
-  qrHint: { fontSize: 11, color: '#6c7f90', marginTop: 8, textAlign: 'center' },
+  otpCard: { width: '100%', alignItems: 'center', padding: 18, backgroundColor: '#fff5f5', borderWidth: 1.5, borderColor: '#fed7d7', borderRadius: 14, marginBottom: 14 },
+  otpCardLabel: { fontSize: 11, fontWeight: '800', color: '#c53030', letterSpacing: 1.2, textAlign: 'center', marginBottom: 6 },
+  otpCodeContainer: { backgroundColor: '#ffffff', paddingVertical: 10, paddingHorizontal: 22, borderRadius: 12, borderWidth: 1.5, borderColor: '#feb2b2', marginVertical: 6, elevation: 2 },
+  otpDigits: { fontSize: 32, fontWeight: '900', color: '#9b2c2c', letterSpacing: 6, textAlign: 'center' },
+  otpInstruction: { fontSize: 12, color: '#742a2a', marginTop: 8, textAlign: 'center', lineHeight: 17 },
   caution: { fontSize: 11, color: '#8b98a5', lineHeight: 17, marginTop: 12, textAlign: 'center' },
   datePickerInput: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#d3dde6', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   datePickerValueText: { fontSize: 15, color: '#0e2433', fontWeight: '600' },
