@@ -41,6 +41,7 @@ import {
   subscribeDonorAssignments,
   respondAssignment,
   markAssignmentArrived,
+  normalizePhoneDigits,
   db,
 } from './src/services/firebase.js';
 import { doc, getDoc } from 'firebase/firestore';
@@ -50,6 +51,31 @@ import { OverlayService } from './src/services/overlayPermission.js';
 const DEMO_MODE = typeof __DEV__ !== 'undefined' && __DEV__;
 
 const bloodTypes = ['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'];
+
+/**
+ * Returns true if the donor's recorded last donation date was within the last 90 days.
+ */
+export function hasDonatedInLast90Days(dateStr) {
+  if (!dateStr || dateStr === 'Never Donated') return false;
+  const t = new Date(`${dateStr}T00:00:00Z`).getTime();
+  if (Number.isNaN(t)) return false;
+  const days = (Date.now() - t) / (1000 * 60 * 60 * 24);
+  return days >= 0 && days < 90;
+}
+
+/**
+ * Returns number of days remaining in the 90-day cooldown period (0 if eligible).
+ */
+export function getDaysRemainingInCooldown(dateStr) {
+  if (!dateStr || dateStr === 'Never Donated') return 0;
+  const t = new Date(`${dateStr}T00:00:00Z`).getTime();
+  if (Number.isNaN(t)) return 0;
+  const days = (Date.now() - t) / (1000 * 60 * 60 * 24);
+  if (days >= 0 && days < 90) {
+    return Math.ceil(90 - days);
+  }
+  return 0;
+}
 
 // The session token is kept in memory for the device-registration callback; persistence
 // itself lives in the OS secure store (see src/services/sessionStore.js).
@@ -227,48 +253,131 @@ function DatePickerField({ label, value, onChange, placeholder = 'Select date' }
 }
 
 function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
-  const [name, setName] = useState(donor?.fullName || donor?.name || '');
-  const [bloodType, setBloodType] = useState(donor?.bloodType || 'O-');
-  const [weightKg, setWeightKg] = useState(String(donor?.weightKg || '68'));
+  const [name, setName] = useState(donor?.fullName || donor?.name || donor?.full_name || '');
+  const [phone, setPhone] = useState(donor?.phone || '');
+  const [bloodType, setBloodType] = useState(donor?.bloodType || donor?.blood_type || 'O-');
+  const [weightKg, setWeightKg] = useState(String(donor?.weightKg || donor?.weight_kg || '68'));
+  const [dateOfBirth, setDateOfBirth] = useState(donor?.dateOfBirth || donor?.date_of_birth || '1998-05-12');
   const [age, setAge] = useState(String(donor?.age || '26'));
-  const [lastDonationDate, setLastDonationDate] = useState(donor?.lastDonationDate || 'Never Donated');
+  const [sex, setSex] = useState(donor?.sex || 'UNSPECIFIED');
+  const [lastDonationDate, setLastDonationDate] = useState(donor?.lastDonationDate || donor?.last_donation_date || 'Never Donated');
   const [medications, setMedications] = useState(donor?.medications || 'None');
   const [diseases, setDiseases] = useState(donor?.diseases || 'None');
-  const [isAvailable, setIsAvailable] = useState(donor?.isAvailable ?? true);
+  const [isAvailable, setIsAvailable] = useState(donor?.isAvailable ?? donor?.is_available ?? true);
+  const [coords, setCoords] = useState(
+    donor?.latitude && donor?.longitude
+      ? { latitude: donor.latitude, longitude: donor.longitude }
+      : donor?.lat && donor?.lon
+      ? { latitude: donor.lat, longitude: donor.lon }
+      : null
+  );
+  const [locating, setLocating] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (visible && donor) {
-      setName(donor.fullName || donor.name || '');
-      setBloodType(donor.bloodType || 'O-');
-      setWeightKg(String(donor.weightKg || '68'));
+      setName(donor.fullName || donor.name || donor.full_name || '');
+      setPhone(donor.phone || '');
+      setBloodType(donor.bloodType || donor.blood_type || 'O-');
+      setWeightKg(String(donor.weightKg || donor.weight_kg || '68'));
+      const dob = donor.dateOfBirth || donor.date_of_birth || '1998-05-12';
+      setDateOfBirth(dob);
       setAge(String(donor.age || '26'));
-      setLastDonationDate(donor.lastDonationDate || 'Never Donated');
+      setSex(donor.sex || 'UNSPECIFIED');
+      setLastDonationDate(donor.lastDonationDate || donor.last_donation_date || 'Never Donated');
       setMedications(donor.medications || 'None');
       setDiseases(donor.diseases || 'None');
-      setIsAvailable(donor.isAvailable ?? true);
+      setIsAvailable(donor.isAvailable ?? donor.is_available ?? true);
+      setCoords(
+        donor.latitude && donor.longitude
+          ? { latitude: donor.latitude, longitude: donor.longitude }
+          : donor.lat && donor.lon
+          ? { latitude: donor.lat, longitude: donor.lon }
+          : null
+      );
     }
   }, [visible, donor]);
 
+  function handleDobChange(newDob) {
+    setDateOfBirth(newDob);
+    const birth = new Date(`${newDob}T00:00:00Z`).getTime();
+    if (!Number.isNaN(birth)) {
+      const calcAge = Math.floor((Date.now() - birth) / (365.25 * 24 * 3600 * 1000));
+      if (calcAge > 0 && calcAge < 120) {
+        setAge(String(calcAge));
+      }
+    }
+  }
+
+  async function refreshGps() {
+    setLocating(true);
+    try {
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (pos?.coords) {
+        const nextCoords = {
+          latitude: Number(pos.coords.latitude.toFixed(5)),
+          longitude: Number(pos.coords.longitude.toFixed(5)),
+        };
+        setCoords(nextCoords);
+        Alert.alert('GPS Location Updated', `Updated to: ${nextCoords.latitude}, ${nextCoords.longitude}`);
+      }
+    } catch (err) {
+      Alert.alert('Location Error', err.message || 'Unable to fetch current GPS coordinates.');
+    } finally {
+      setLocating(false);
+    }
+  }
+
   async function handleSave() {
-    if (!name.trim()) return Alert.alert('Required', 'Please enter your full name.');
+    const cleanName = name.trim();
+    if (!cleanName) return Alert.alert('Required', 'Please enter your full legal name.');
+    const cleanPhone = phone.trim();
+    if (!cleanPhone || cleanPhone.length < 6) {
+      return Alert.alert('Required', 'Please enter a valid phone number.');
+    }
+    const cleanDigits = normalizePhoneDigits(cleanPhone);
+    const weightNum = Number(weightKg) || 68;
+    const ageNum = Number(age) || 26;
+
     setSaving(true);
     try {
       const updates = {
-        fullName: name.trim(),
+        fullName: cleanName,
+        full_name: cleanName,
+        phone: cleanPhone,
+        phone_digits: cleanDigits,
         bloodType,
-        weightKg: Number(weightKg) || 68,
-        age: Number(age) || 26,
-        lastDonationDate,
+        blood_type: bloodType,
+        weightKg: weightNum,
+        weight_kg: weightNum,
+        age: ageNum,
+        dateOfBirth,
+        date_of_birth: dateOfBirth,
+        sex,
+        lastDonationDate: lastDonationDate || 'Never Donated',
+        last_donation_date: lastDonationDate || 'Never Donated',
         medications: medications.trim() || 'None',
         diseases: diseases.trim() || 'None',
         isAvailable,
+        is_available: isAvailable,
+        consentAccepted: true,
+        ...(coords ? {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          lat: coords.latitude,
+          lon: coords.longitude,
+        } : {}),
       };
+
       if (donor?.id) {
-        await updateDonorProfile(donor.id, updates).catch((e) => console.warn('Firestore profile update error:', e));
+        await updateDonorProfile(donor.id, updates).catch((e) =>
+          console.warn('Firestore profile update error:', e)
+        );
       }
+      await saveDonorPhone(cleanPhone).catch(() => {});
       if (onSave) await onSave(updates);
       if (onSaved) await onSaved(updates);
+      Alert.alert('Profile Saved', 'Your donor profile details have been updated successfully.');
       onClose();
     } catch (err) {
       Alert.alert('Save Failed', err.message);
@@ -277,6 +386,8 @@ function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
     }
   }
 
+  const cooldownRemaining = getDaysRemainingInCooldown(lastDonationDate);
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={styles.safe}>
@@ -284,12 +395,29 @@ function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
         <ScrollView contentContainerStyle={styles.editProfileContainer}>
           <View style={styles.editHeader}>
             <Text style={styles.editTitle}>✏️ Edit Donor Profile</Text>
-            <Text style={styles.editSub}>Update your medical details and availability</Text>
+            <Text style={styles.editSub}>All details are editable and synchronize in real-time</Text>
           </View>
 
+          {/* Full Legal Name */}
           <Text style={styles.label}>Full Legal Name</Text>
-          <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Your full name" />
+          <TextInput
+            style={styles.input}
+            value={name}
+            onChangeText={setName}
+            placeholder="Your full legal name"
+          />
 
+          {/* Phone Number */}
+          <Text style={styles.label}>Mobile Phone Number</Text>
+          <TextInput
+            style={styles.input}
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+            placeholder="+91 9876543210"
+          />
+
+          {/* Blood Group */}
           <Text style={styles.label}>Blood Group</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeRow}>
             {bloodTypes.map((type) => (
@@ -303,29 +431,119 @@ function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
             ))}
           </ScrollView>
 
+          {/* Weight & Age */}
           <View style={{ flexDirection: 'row', gap: 12 }}>
             <View style={{ flex: 1 }}>
               <Text style={styles.label}>Weight (kg)</Text>
-              <TextInput style={styles.input} value={weightKg} onChangeText={setWeightKg} keyboardType="numeric" placeholder="68" />
+              <TextInput
+                style={styles.input}
+                value={weightKg}
+                onChangeText={setWeightKg}
+                keyboardType="numeric"
+                placeholder="68"
+              />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.label}>Age</Text>
-              <TextInput style={styles.input} value={age} onChangeText={setAge} keyboardType="numeric" placeholder="26" />
+              <TextInput
+                style={styles.input}
+                value={age}
+                onChangeText={setAge}
+                keyboardType="numeric"
+                placeholder="26"
+              />
             </View>
           </View>
 
-          <DatePickerField label="Last Whole-Blood Donation" value={lastDonationDate} onChange={setLastDonationDate} />
+          {/* Date of Birth */}
+          <DatePickerField
+            label="Date of Birth"
+            value={dateOfBirth}
+            onChange={handleDobChange}
+          />
 
+          {/* Sex / Gender */}
+          <Text style={styles.label}>Biological Sex / Gender</Text>
+          <View style={styles.sexRow}>
+            {['MALE', 'FEMALE', 'OTHER', 'UNSPECIFIED'].map((option) => (
+              <Pressable
+                key={option}
+                onPress={() => setSex(option)}
+                style={[styles.sexChip, sex === option && styles.sexChipSelected]}
+              >
+                <Text style={[styles.sexText, sex === option && styles.sexTextSelected]}>
+                  {option === 'MALE' ? '♂ Male' : option === 'FEMALE' ? '♀ Female' : option === 'OTHER' ? 'Other' : 'Unspecified'}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {/* Last Donation Date */}
+          <DatePickerField
+            label="Last Whole-Blood Donation"
+            value={lastDonationDate}
+            onChange={setLastDonationDate}
+          />
+
+          {/* Live Cooldown Status Display */}
+          {cooldownRemaining > 0 ? (
+            <View style={styles.editCooldownAlertBox}>
+              <Text style={styles.editCooldownAlertIcon}>⚠️</Text>
+              <Text style={styles.editCooldownAlertText}>
+                Donated within last 90 days. <Text style={{ fontWeight: '800' }}>{cooldownRemaining} days</Text> of cooldown remaining. Emergency alert messages will be withheld until cooldown finishes.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.editCooldownOkBox}>
+              <Text style={styles.editCooldownOkIcon}>✅</Text>
+              <Text style={styles.editCooldownOkText}>
+                Past 90-day cooldown. You are fully eligible to receive emergency dispatch alerts.
+              </Text>
+            </View>
+          )}
+
+          {/* Medications */}
           <Text style={styles.label}>Current Medications</Text>
-          <TextInput style={styles.input} value={medications} onChangeText={setMedications} placeholder="None, or list medications" />
+          <TextInput
+            style={styles.input}
+            value={medications}
+            onChangeText={setMedications}
+            placeholder="None, or specify medications"
+          />
 
-          <Text style={styles.label}>Medical Conditions / Infections</Text>
-          <TextInput style={styles.input} value={diseases} onChangeText={setDiseases} placeholder="None, or specify" />
+          {/* Medical Conditions */}
+          <Text style={styles.label}>Medical Conditions / Diseases</Text>
+          <TextInput
+            style={styles.input}
+            value={diseases}
+            onChangeText={setDiseases}
+            placeholder="None, or specify conditions"
+          />
 
+          {/* GPS Coordinates & Refresher */}
+          <Text style={styles.label}>Recorded GPS Location</Text>
+          <View style={styles.gpsCard}>
+            <Text style={styles.gpsText}>
+              {coords
+                ? `📍 Lat: ${coords.latitude.toFixed(4)}, Lon: ${coords.longitude.toFixed(4)}`
+                : '📍 GPS Location not yet recorded'}
+            </Text>
+            <Pressable
+              style={styles.gpsButton}
+              onPress={refreshGps}
+              disabled={locating}
+            >
+              <Text style={styles.gpsButtonText}>
+                {locating ? 'Acquiring GPS...' : '📍 Refresh to Current GPS Location'}
+              </Text>
+            </Pressable>
+          </View>
+
+          {/* Availability Toggle */}
           <View style={[styles.availabilityRow, { marginVertical: 12 }]}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.availabilityTitle}>Available for Alerts</Text>
-              <Text style={styles.availabilitySub}>Turn off temporarily if travelling or unwell</Text>
+              <Text style={styles.availabilityTitle}>Available for Emergency Alerts</Text>
+              <Text style={styles.availabilitySub}>Temporarily pause alerts if unwell or travelling</Text>
             </View>
             <Switch
               value={isAvailable}
@@ -335,8 +553,13 @@ function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
             />
           </View>
 
+          {/* Action Buttons */}
           <View style={{ marginTop: 20, gap: 10 }}>
-            <Button title={saving ? 'Saving...' : 'Save Profile Changes'} onPress={handleSave} disabled={saving} />
+            <Button
+              title={saving ? 'Saving...' : 'Save Profile Changes'}
+              onPress={handleSave}
+              disabled={saving}
+            />
             <Button title="Cancel" variant="plain" onPress={onClose} disabled={saving} />
           </View>
         </ScrollView>
@@ -622,38 +845,93 @@ function AlertStatusCard({ status, busy, onAction }) {
 }
 
 function IncomingCallAlert({ alertItem, onAccept, onDecline }) {
+  const [isMuted, setIsMuted] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const radarWave1 = useRef(new Animated.Value(0)).current;
+  const radarWave2 = useRef(new Animated.Value(0)).current;
+  const beaconBlink = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (!alertItem) return undefined;
-    const pattern = [0, 500, 200, 500, 200, 500];
+
+    // Start siren sound and vibration
+    OverlayService.playEmergencyAlertSound().catch(() => {});
+    setIsMuted(false);
+
+    const pattern = [0, 600, 200, 600, 200, 800];
     try {
       Vibration.vibrate(pattern, true);
     } catch (_) {}
 
+    // 1. Center pulse animation
     const pulse = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
-          toValue: 1.14,
-          duration: 550,
+          toValue: 1.07,
+          duration: 600,
           useNativeDriver: true,
         }),
         Animated.timing(pulseAnim, {
           toValue: 1,
-          duration: 550,
+          duration: 600,
           useNativeDriver: true,
         }),
       ])
     );
     pulse.start();
 
+    // 2. Radar wave 1 (continuous expansion & fade)
+    const wave1 = Animated.loop(
+      Animated.timing(radarWave1, {
+        toValue: 1,
+        duration: 1800,
+        useNativeDriver: true,
+      })
+    );
+    wave1.start();
+
+    // 3. Radar wave 2 (staggered delay)
+    let wave2 = null;
+    const wave2Timer = setTimeout(() => {
+      wave2 = Animated.loop(
+        Animated.timing(radarWave2, {
+          toValue: 1,
+          duration: 1800,
+          useNativeDriver: true,
+        })
+      );
+      wave2.start();
+    }, 900);
+
+    // 4. Strobe / beacon blink
+    const blink = Animated.loop(
+      Animated.sequence([
+        Animated.timing(beaconBlink, {
+          toValue: 0.2,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(beaconBlink, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    blink.start();
+
     return () => {
       pulse.stop();
+      wave1.stop();
+      if (wave2) wave2.stop();
+      blink.stop();
+      clearTimeout(wave2Timer);
+      OverlayService.stopEmergencyAlertSound().catch(() => {});
       try {
         Vibration.cancel();
       } catch (_) {}
     };
-  }, [alertItem, pulseAnim]);
+  }, [alertItem]);
 
   if (!alertItem) return null;
 
@@ -661,69 +939,183 @@ function IncomingCallAlert({ alertItem, onAccept, onDecline }) {
   const hospital = alertItem.request?.hospitalName || 'Central City Medical Centre';
   const units = alertItem.request?.unitsNeeded || 1;
   const distance = alertItem.distanceKm ?? '0.8';
+  const etaMinutes = Math.max(3, Math.round(Number(distance || 1) * 2.5));
+
+  const toggleMute = () => {
+    if (isMuted) {
+      OverlayService.playEmergencyAlertSound().catch(() => {});
+      setIsMuted(false);
+    } else {
+      OverlayService.stopEmergencyAlertSound().catch(() => {});
+      setIsMuted(true);
+    }
+  };
+
+  const handleAccept = () => {
+    OverlayService.stopEmergencyAlertSound().catch(() => {});
+    try {
+      Vibration.cancel();
+    } catch (_) {}
+    onAccept();
+  };
+
+  const handleDecline = () => {
+    OverlayService.stopEmergencyAlertSound().catch(() => {});
+    try {
+      Vibration.cancel();
+    } catch (_) {}
+    onDecline();
+  };
 
   return (
     <Modal visible={Boolean(alertItem)} animationType="slide" transparent={false} statusBarTranslucent>
-      <View style={styles.callShell}>
-        <ExpoStatusBar style="light" />
-        <View style={styles.callTop}>
-          <Animated.View style={[styles.callBeacon, { transform: [{ scale: pulseAnim }] }]}>
-            <Text style={styles.callBeaconIcon}>🚨</Text>
-          </Animated.View>
-          <Text style={styles.callBadge}>CRITICAL EMERGENCY DISPATCH</Text>
-          <Text style={styles.callLive}>Incoming Alert • Live Response Requested</Text>
+      <SafeAreaView style={styles.callShell}>
+        <ExpoStatusBar style="light" backgroundColor="#050c14" />
+
+        {/* Top Dispatch Control Bar */}
+        <View style={styles.callHeader}>
+          <View style={styles.callLiveBadge}>
+            <Animated.View style={[styles.callLiveDot, { opacity: beaconBlink }]} />
+            <Text style={styles.callLiveText}>LIVE DISPATCH</Text>
+          </View>
+
+          <Pressable
+            style={[styles.callMuteButton, isMuted && styles.callMuteButtonActive]}
+            onPress={toggleMute}
+          >
+            <Text style={styles.callMuteIcon}>{isMuted ? '🔇' : '🔊'}</Text>
+            <Text style={styles.callMuteText}>{isMuted ? 'Siren Muted' : 'Mute Siren'}</Text>
+          </Pressable>
         </View>
 
-        <View style={styles.callCenter}>
-          <Animated.View style={[styles.callRadarCircle, { transform: [{ scale: pulseAnim }] }]}>
-            <View style={styles.callBloodCircle}>
-              <Text style={styles.callBloodType}>{bloodType}</Text>
-              <Text style={styles.callBloodSub}>CRITICAL</Text>
-            </View>
-          </Animated.View>
+        {/* Emergency Alert Header Banner */}
+        <View style={styles.callTop}>
+          <View style={styles.callCodeRedTag}>
+            <Animated.Text style={[styles.callCodeRedFlash, { opacity: beaconBlink }]}>🚨</Animated.Text>
+            <Text style={styles.callCodeRedText}>CRITICAL TRAUMA DISPATCH</Text>
+          </View>
+          <Text style={styles.callSubBanner}>CODE RED · IMMEDIATE PATIENT TRANSFUSION</Text>
+        </View>
 
-          <Text style={styles.callHospital}>{hospital}</Text>
-          <View style={styles.callMetaRow}>
-            <View style={styles.callMetaPill}>
-              <Text style={styles.callMetaText}>📍 {distance} km away</Text>
+        {/* Central Tactical Radar & Target Blood Group */}
+        <View style={styles.callCenter}>
+          <View style={styles.radarContainer}>
+            {/* Animated Radar Expansion Ring 1 */}
+            <Animated.View
+              style={[
+                styles.radarWaveRing,
+                {
+                  transform: [
+                    {
+                      scale: radarWave1.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [1, 1.8],
+                      }),
+                    },
+                  ],
+                  opacity: radarWave1.interpolate({
+                    inputRange: [0, 0.7, 1],
+                    outputRange: [0.6, 0.25, 0],
+                  }),
+                },
+              ]}
+            />
+            {/* Animated Radar Expansion Ring 2 */}
+            <Animated.View
+              style={[
+                styles.radarWaveRing,
+                {
+                  transform: [
+                    {
+                      scale: radarWave2.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [1, 1.8],
+                      }),
+                    },
+                  ],
+                  opacity: radarWave2.interpolate({
+                    inputRange: [0, 0.7, 1],
+                    outputRange: [0.6, 0.25, 0],
+                  }),
+                },
+              ]}
+            />
+
+            {/* Core Target Disk */}
+            <Animated.View style={[styles.callRadarCircle, { transform: [{ scale: pulseAnim }] }]}>
+              <View style={styles.callBloodCircle}>
+                <Text style={styles.callBloodDrop}>🩸</Text>
+                <Text style={styles.callBloodType}>{bloodType}</Text>
+                <View style={styles.matchPill}>
+                  <Text style={styles.matchPillText}>EXACT MATCH</Text>
+                </View>
+              </View>
+            </Animated.View>
+          </View>
+
+          {/* Logistics & Intel Glass Card */}
+          <View style={styles.intelCard}>
+            <View style={styles.intelHeader}>
+              <Text style={styles.hospitalIcon}>🏥</Text>
+              <View style={styles.intelHeaderTextCol}>
+                <Text style={styles.callHospital} numberOfLines={1} ellipsizeMode="tail">
+                  {hospital}
+                </Text>
+                <Text style={styles.callHospitalDept}>Emergency Trauma & Surgery Centre</Text>
+              </View>
             </View>
-            <View style={styles.callMetaPill}>
-              <Text style={styles.callMetaText}>🩸 {units} unit{units > 1 ? 's' : ''} needed</Text>
+
+            {/* 3 Metric Pods */}
+            <View style={styles.statGrid}>
+              <View style={styles.statPod}>
+                <Text style={styles.statPodIcon}>📍</Text>
+                <Text style={styles.statPodValue}>{distance} km</Text>
+                <Text style={styles.statPodLabel}>PROXIMITY</Text>
+              </View>
+              <View style={[styles.statPod, styles.statPodHighlight]}>
+                <Text style={styles.statPodIcon}>🩸</Text>
+                <Text style={styles.statPodValue}>
+                  {units} Unit{units > 1 ? 's' : ''}
+                </Text>
+                <Text style={styles.statPodLabel}>NEEDED NOW</Text>
+              </View>
+              <View style={styles.statPod}>
+                <Text style={styles.statPodIcon}>⚡</Text>
+                <Text style={styles.statPodValue}>~{etaMinutes} min</Text>
+                <Text style={styles.statPodLabel}>EST. DRIVE</Text>
+              </View>
+            </View>
+
+            {/* Emergency Directive Callout */}
+            <View style={styles.directiveCallout}>
+              <Text style={styles.directiveBar}>|</Text>
+              <Text style={styles.directiveText}>
+                Patient has acute hemorrhagic trauma and needs immediate whole blood. You are the nearest compatible donor ready for instant dispatch.
+              </Text>
             </View>
           </View>
-          <Text style={styles.callUrgentCopy}>
-            Urgent whole-blood transfusion needed immediately. Your blood group is an exact match.
-          </Text>
         </View>
 
+        {/* Tactical Actions (Bottom) */}
         <View style={styles.callBottom}>
-          <Pressable
-            style={styles.callAcceptButton}
-            onPress={() => {
-              try {
-                Vibration.cancel();
-              } catch (_) {}
-              onAccept();
-            }}
-          >
-            <Text style={styles.callAcceptIcon}>✓</Text>
-            <Text style={styles.callAcceptText}>ACCEPT EMERGENCY</Text>
-            <Text style={styles.callAcceptSub}>I can donate now</Text>
+          <Pressable style={styles.callAcceptButton} onPress={handleAccept}>
+            <View style={styles.callAcceptRow}>
+              <View style={styles.callAcceptIconCircle}>
+                <Text style={styles.callAcceptIcon}>✓</Text>
+              </View>
+              <View style={styles.callAcceptTextCol}>
+                <Text style={styles.callAcceptText}>ACCEPT EMERGENCY DISPATCH</Text>
+                <Text style={styles.callAcceptSub}>Confirm safety checks & view Arrival OTP</Text>
+              </View>
+              <Text style={styles.callAcceptChevron}>➔</Text>
+            </View>
           </Pressable>
 
-          <Pressable
-            style={styles.callDeclineButton}
-            onPress={() => {
-              try {
-                Vibration.cancel();
-              } catch (_) {}
-              onDecline();
-            }}
-          >
-            <Text style={styles.callDeclineText}>Decline / Not Available</Text>
+          <Pressable style={styles.callDeclineButton} onPress={handleDecline}>
+            <Text style={styles.callDeclineText}>✕ Decline / Standby (Route to Next Donor)</Text>
           </Pressable>
         </View>
-      </View>
+      </SafeAreaView>
     </Modal>
   );
 }
@@ -765,12 +1157,12 @@ function Screening({ alertItem, token, onDone, onCancel }) {
           <Text style={styles.criticalLabel}>CRITICAL BLOOD ALERT</Text>
           <Text style={styles.criticalType}>{alertItem.request?.bloodType || 'MATCH'}</Text>
           <Text style={styles.criticalCopy}>
-            Central City Medical Centre needs {alertItem.request?.unitsNeeded || 1} unit
+            {alertItem.request?.hospitalName || 'Central City Medical Centre'} needs {alertItem.request?.unitsNeeded || 1} unit
             {(alertItem.request?.unitsNeeded || 1) > 1 ? 's' : ''} now.
           </Text>
           <View style={styles.distance}>
             <Text style={styles.distanceText}>
-              about {alertItem.distanceKm} km away - tier {alertItem.tier}
+              about {alertItem.distanceKm} km away - tier {alertItem.tier || 1}
             </Text>
           </View>
         </View>
@@ -1058,6 +1450,10 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
 
   // When a pending dispatch arrives, automatically launch the incoming emergency call alert and bring app to front
   useEffect(() => {
+    // If user donated blood in last 90 days, do not give them alert msg!
+    if (hasDonatedInLast90Days(donor?.lastDonationDate)) {
+      return;
+    }
     const pendingAlert = alerts.find(
       (item) => item.status === 'PINGED' && !dismissedAlertIds.has(item.id) && !dismissedAlertIds.has(item.requestId)
     );
@@ -1065,11 +1461,15 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
       setIncomingCallAlert(pendingAlert);
       OverlayService.bringAppToForeground().catch(() => {});
     }
-  }, [alerts, dismissedAlertIds, screening, incomingCallAlert]);
+  }, [alerts, dismissedAlertIds, screening, incomingCallAlert, donor?.lastDonationDate]);
 
   // Route the donor to the alert the notification referred to (foreground + cold start).
   useEffect(() => {
     if (!route?.assignmentId) return;
+    if (hasDonatedInLast90Days(donor?.lastDonationDate)) {
+      onRouteHandled?.();
+      return;
+    }
     const match = alerts.find((item) => item.id === route.assignmentId);
     if (match) {
       if (match.status === 'PINGED') {
@@ -1077,7 +1477,7 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
       }
       onRouteHandled?.();
     }
-  }, [route, alerts, onRouteHandled]);
+  }, [route, alerts, onRouteHandled, donor?.lastDonationDate]);
 
   function handleAcceptCall(item) {
     setIncomingCallAlert(null);
@@ -1160,7 +1560,9 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
     await refreshAlerting();
   }
 
-  const pending = alerts.find((item) => item.status === 'PINGED');
+  const isCooldownActive = hasDonatedInLast90Days(donor?.lastDonationDate);
+  const cooldownDaysRemaining = getDaysRemainingInCooldown(donor?.lastDonationDate);
+  const pending = isCooldownActive ? null : alerts.find((item) => item.status === 'PINGED');
   const active = alerts.find((item) => ['ACCEPTED', 'ARRIVED'].includes(item.status));
 
   if (screening) {
@@ -1246,8 +1648,10 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
             <Text style={styles.profileMeta}>
               Reliability score <Text style={styles.score}>{donor?.reliabilityScore ?? '--'}</Text>
             </Text>
-            <Text style={[styles.eligibility, donor?.eligible ? styles.eligible : styles.ineligible]}>
-              {donor?.eligible ? 'Eligible to donate' : 'Donation cooldown active'}
+            <Text style={[styles.eligibility, isCooldownActive ? styles.ineligible : (donor?.eligible ? styles.eligible : styles.ineligible)]}>
+              {isCooldownActive
+                ? `Donation cooldown active (${cooldownDaysRemaining}d left)`
+                : (donor?.eligible ? 'Eligible to donate' : 'Eligibility check pending')}
             </Text>
           </View>
           <Pressable
@@ -1257,6 +1661,18 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
             <Text style={styles.editBadgeText}>✏️ Edit</Text>
           </Pressable>
         </View>
+
+        {isCooldownActive && (
+          <View style={styles.cooldownBanner}>
+            <Text style={styles.cooldownBannerIcon}>⏳</Text>
+            <View style={styles.flex}>
+              <Text style={styles.cooldownBannerTitle}>90-DAY DONATION COOLDOWN ACTIVE</Text>
+              <Text style={styles.cooldownBannerText}>
+                Last donation: {donor?.lastDonationDate}. Alert notifications are withheld for {cooldownDaysRemaining} more days to safeguard your health before your next eligible donation.
+              </Text>
+            </View>
+          </View>
+        )}
 
         <View style={styles.availability}>
           <View style={styles.flex}>
@@ -1280,10 +1696,13 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
         ) : (
           <View style={styles.waiting}>
             <Text style={styles.waitingIcon}>~</Text>
-            <Text style={styles.waitingTitle}>Standing by</Text>
+            <Text style={styles.waitingTitle}>
+              {isCooldownActive ? 'Resting & Recovering' : 'Standing by'}
+            </Text>
             <Text style={styles.waitingText}>
-              Keep this app installed and notifications allowed. When a matching request is raised,
-              the hospital dispatch engine will contact you.
+              {isCooldownActive
+                ? `You donated blood recently. Your body needs 90 days to replenish hemoglobin before your next donation (${cooldownDaysRemaining} days remaining). Alerts will resume automatically once eligible.`
+                : 'Keep this app installed and notifications allowed. When a matching request is raised, the hospital dispatch engine will contact you.'}
             </Text>
           </View>
         )}
@@ -1308,6 +1727,12 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
         <Pressable
           style={styles.callSimulatorButton}
           onPress={() => {
+            if (isCooldownActive) {
+              return Alert.alert(
+                'Donation Cooldown Active',
+                `You recorded a blood donation within the last 90 days (${cooldownDaysRemaining} days remaining). To protect donor health, emergency alert dispatch is paused until your cooldown period expires.`
+              );
+            }
             setIncomingCallAlert({
               id: `sim-call-${Date.now()}`,
               isSimulated: true,
@@ -1371,7 +1796,10 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
         donor={donor}
         onClose={() => setEditProfileOpen(false)}
         onSaved={(updated) => {
-          setDonor((prev) => ({ ...prev, ...donorView(updated) }));
+          setDonor((prev) => {
+            const merged = { ...prev, ...updated, consentAccepted: true };
+            return { ...merged, ...donorView(merged) };
+          });
           refresh();
         }}
       />
@@ -1648,29 +2076,312 @@ const styles = StyleSheet.create({
   availabilitySub: { fontSize: 12, color: '#687d91', marginTop: 2 },
   callSimulatorButton: { backgroundColor: '#e93f4e', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 16, elevation: 4, shadowColor: '#e93f4e', shadowRadius: 8, shadowOpacity: 0.5 },
   callSimulatorButtonText: { color: '#ffffff', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 },
-  callShell: { flex: 1, backgroundColor: '#091824', justifyContent: 'space-between' },
-  callTop: { alignItems: 'center', marginTop: 54, paddingHorizontal: 20 },
-  callBeacon: { width: 68, height: 68, borderRadius: 34, backgroundColor: '#e93f4e', alignItems: 'center', justifyContent: 'center', elevation: 12, shadowColor: '#ff2e43', shadowRadius: 18, shadowOpacity: 0.8 },
-  callBeaconIcon: { fontSize: 32 },
-  callBadge: { color: '#ff6b78', fontSize: 13, fontWeight: '800', letterSpacing: 2, marginTop: 14, textAlign: 'center' },
-  callLive: { color: '#9bb2c5', fontSize: 13, marginTop: 4, textAlign: 'center' },
-  callCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
-  callRadarCircle: { width: 170, height: 170, borderRadius: 85, backgroundColor: 'rgba(233, 63, 78, 0.15)', borderWidth: 2, borderColor: 'rgba(233, 63, 78, 0.4)', alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
-  callBloodCircle: { width: 126, height: 126, borderRadius: 63, backgroundColor: '#e93f4e', alignItems: 'center', justifyContent: 'center', elevation: 10, shadowColor: '#e93f4e', shadowRadius: 16, shadowOpacity: 0.7 },
-  callBloodType: { color: '#fff', fontSize: 44, fontWeight: '900' },
-  callBloodSub: { color: '#ffe5e7', fontSize: 11, fontWeight: '800', letterSpacing: 1.2, marginTop: 2 },
-  callHospital: { color: '#ffffff', fontSize: 22, fontWeight: '800', textAlign: 'center' },
-  callMetaRow: { flexDirection: 'row', gap: 10, marginTop: 12, marginBottom: 14 },
-  callMetaPill: { backgroundColor: 'rgba(255, 255, 255, 0.12)', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.18)' },
-  callMetaText: { color: '#e2ecf5', fontSize: 13, fontWeight: '700' },
-  callUrgentCopy: { color: '#8ba3b7', fontSize: 13.5, textAlign: 'center', lineHeight: 20, paddingHorizontal: 16 },
-  callBottom: { paddingHorizontal: 24, paddingBottom: 42, gap: 12 },
-  callAcceptButton: { backgroundColor: '#1fb854', borderRadius: 16, paddingVertical: 18, alignItems: 'center', justifyContent: 'center', elevation: 8, shadowColor: '#1fb854', shadowRadius: 14, shadowOpacity: 0.6 },
-  callAcceptIcon: { color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 2 },
-  callAcceptText: { color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
-  callAcceptSub: { color: '#e2f9ea', fontSize: 12, fontWeight: '600', marginTop: 2 },
-  callDeclineButton: { backgroundColor: 'rgba(255, 255, 255, 0.08)', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.16)', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
-  callDeclineText: { color: '#ff8894', fontSize: 14, fontWeight: '700' },
+  callShell: {
+    flex: 1,
+    backgroundColor: '#050c14',
+    justifyContent: 'space-between',
+    paddingTop: 10,
+  },
+  callHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 36,
+  },
+  callLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(233, 63, 78, 0.15)',
+    borderColor: 'rgba(233, 63, 78, 0.5)',
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 7,
+  },
+  callLiveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ff334b',
+  },
+  callLiveText: {
+    color: '#ff6b78',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  callMuteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.10)',
+    borderColor: 'rgba(255, 255, 255, 0.20)',
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  callMuteButtonActive: {
+    backgroundColor: 'rgba(233, 63, 78, 0.25)',
+    borderColor: '#e93f4e',
+  },
+  callMuteIcon: {
+    fontSize: 14,
+  },
+  callMuteText: {
+    color: '#e2ecf5',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  callTop: {
+    alignItems: 'center',
+    marginTop: 8,
+    paddingHorizontal: 20,
+  },
+  callCodeRedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  callCodeRedFlash: {
+    fontSize: 18,
+  },
+  callCodeRedText: {
+    color: '#ff334b',
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 1.8,
+  },
+  callSubBanner: {
+    color: '#8da6bb',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginTop: 3,
+  },
+  callCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    marginVertical: 2,
+  },
+  radarContainer: {
+    width: 210,
+    height: 210,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    marginVertical: 4,
+  },
+  radarWaveRing: {
+    position: 'absolute',
+    width: 190,
+    height: 190,
+    borderRadius: 95,
+    borderWidth: 2,
+    borderColor: '#ff334b',
+  },
+  callRadarCircle: {
+    width: 168,
+    height: 168,
+    borderRadius: 84,
+    backgroundColor: 'rgba(233, 63, 78, 0.12)',
+    borderWidth: 2,
+    borderColor: 'rgba(233, 63, 78, 0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  callBloodCircle: {
+    width: 132,
+    height: 132,
+    borderRadius: 66,
+    backgroundColor: '#d82c3c',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 14,
+    shadowColor: '#ff2e43',
+    shadowRadius: 20,
+    shadowOpacity: 0.85,
+  },
+  callBloodDrop: {
+    fontSize: 14,
+    marginBottom: -4,
+  },
+  callBloodType: {
+    color: '#ffffff',
+    fontSize: 46,
+    fontWeight: '900',
+    letterSpacing: 1,
+    lineHeight: 50,
+  },
+  matchPill: {
+    backgroundColor: '#059669',
+    paddingHorizontal: 10,
+    paddingVertical: 2,
+    borderRadius: 10,
+    marginTop: 3,
+  },
+  matchPillText: {
+    color: '#ffffff',
+    fontSize: 9.5,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  intelCard: {
+    width: '100%',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 18,
+    padding: 14,
+    marginTop: 6,
+  },
+  intelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  hospitalIcon: {
+    fontSize: 24,
+  },
+  intelHeaderTextCol: {
+    flex: 1,
+  },
+  callHospital: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  callHospitalDept: {
+    color: '#8da6bb',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  statGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  statPod: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: 'rgba(255, 255, 255, 0.10)',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  statPodHighlight: {
+    backgroundColor: 'rgba(233, 63, 78, 0.12)',
+    borderColor: 'rgba(233, 63, 78, 0.35)',
+  },
+  statPodIcon: {
+    fontSize: 14,
+  },
+  statPodValue: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  statPodLabel: {
+    color: '#8da6bb',
+    fontSize: 8.5,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginTop: 2,
+  },
+  directiveCallout: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255, 51, 75, 0.08)',
+    borderColor: 'rgba(255, 51, 75, 0.25)',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 9,
+    gap: 8,
+    alignItems: 'center',
+  },
+  directiveBar: {
+    color: '#ff334b',
+    fontSize: 18,
+    fontWeight: '900',
+    marginLeft: 2,
+  },
+  directiveText: {
+    flex: 1,
+    color: '#d0e0ed',
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  callBottom: {
+    paddingHorizontal: 20,
+    paddingBottom: 28,
+    gap: 10,
+  },
+  callAcceptButton: {
+    backgroundColor: '#059669',
+    borderRadius: 16,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    elevation: 8,
+    shadowColor: '#10b981',
+    shadowRadius: 14,
+    shadowOpacity: 0.6,
+  },
+  callAcceptRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  callAcceptIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  callAcceptIcon: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  callAcceptTextCol: {
+    flex: 1,
+  },
+  callAcceptText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  callAcceptSub: {
+    color: '#d1fae5',
+    fontSize: 10.5,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  callAcceptChevron: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  callDeclineButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  callDeclineText: {
+    color: '#ff8894',
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
   overlayBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff3cd', borderColor: '#ffeeba', borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 12, marginBottom: 4, gap: 10 },
   overlayBannerIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
   overlayBannerEyebrow: { color: '#856404', fontSize: 9.5, fontWeight: '800', letterSpacing: 0.8 },
@@ -1689,4 +2400,23 @@ const styles = StyleSheet.create({
   overlayStatusButtonOn: { backgroundColor: '#e8f5e9', borderWidth: 1, borderColor: '#c8e6c9' },
   overlayStatusButtonTextOff: { color: '#c62828', fontWeight: '800', fontSize: 12.5 },
   overlayStatusButtonTextOn: { color: '#2e7d32', fontWeight: '800', fontSize: 12.5 },
+  sexRow: { flexDirection: 'row', gap: 8, marginBottom: 16, flexWrap: 'wrap' },
+  sexChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#f0f4f8', borderWidth: 1, borderColor: '#d3dde6' },
+  sexChipSelected: { backgroundColor: '#12364e', borderColor: '#12364e' },
+  sexText: { fontSize: 12.5, fontWeight: '700', color: '#4a5b6d' },
+  sexTextSelected: { color: '#ffffff' },
+  editCooldownAlertBox: { flexDirection: 'row', backgroundColor: '#fff3cd', borderColor: '#ffeeba', borderWidth: 1, borderRadius: 10, padding: 10, marginTop: 4, marginBottom: 14, gap: 8, alignItems: 'flex-start' },
+  editCooldownAlertIcon: { fontSize: 16, marginTop: 1 },
+  editCooldownAlertText: { flex: 1, fontSize: 11.5, color: '#856404', lineHeight: 16 },
+  editCooldownOkBox: { flexDirection: 'row', backgroundColor: '#e8f5e9', borderColor: '#c8e6c9', borderWidth: 1, borderRadius: 10, padding: 10, marginTop: 4, marginBottom: 14, gap: 8, alignItems: 'flex-start' },
+  editCooldownOkIcon: { fontSize: 16, marginTop: 1 },
+  editCooldownOkText: { flex: 1, fontSize: 11.5, color: '#2e7d32', lineHeight: 16 },
+  gpsCard: { backgroundColor: '#f8fafc', borderColor: '#e2ecf5', borderWidth: 1, borderRadius: 10, padding: 12, marginTop: 4, marginBottom: 14 },
+  gpsText: { fontSize: 12, color: '#4a5b6d', marginBottom: 8, fontWeight: '600' },
+  gpsButton: { backgroundColor: '#edf2f7', borderColor: '#cbd5e1', borderWidth: 1, borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
+  gpsButtonText: { fontSize: 12, fontWeight: '700', color: '#1e293b' },
+  cooldownBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff3cd', borderColor: '#ffeeba', borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 12, marginBottom: 4, gap: 10 },
+  cooldownBannerIcon: { fontSize: 24 },
+  cooldownBannerTitle: { color: '#856404', fontSize: 12, fontWeight: '800', letterSpacing: 0.8 },
+  cooldownBannerText: { color: '#66512c', fontSize: 11.5, marginTop: 2, lineHeight: 16 },
 });

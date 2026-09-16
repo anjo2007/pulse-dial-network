@@ -48,6 +48,36 @@ export const OverlayService = {
     } catch (_) {
       // ignore
     }
+  },
+
+  /**
+   * Play high-urgency emergency dispatch siren looping in background.
+   */
+  async playEmergencyAlertSound() {
+    if (Platform.OS !== 'android') return false;
+    try {
+      if (OverlayPermission?.playEmergencyAlertSound) {
+        return await OverlayPermission.playEmergencyAlertSound();
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  /**
+   * Stop emergency alert siren audio immediately.
+   */
+  async stopEmergencyAlertSound() {
+    if (Platform.OS !== 'android') return true;
+    try {
+      if (OverlayPermission?.stopEmergencyAlertSound) {
+        return await OverlayPermission.stopEmergencyAlertSound();
+      }
+      return true;
+    } catch (_) {
+      return true;
+    }
   }
 };
 

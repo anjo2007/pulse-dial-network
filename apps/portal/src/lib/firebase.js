@@ -206,6 +206,18 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
       const donorPhone = donor.phone || '';
       const donorDigits = normalizePhoneDigits(donorPhone);
 
+      // Check 90-day donation cooldown: if donor donated blood in last 90 days, do NOT alert them
+      const lastDon = donor.last_donation_date || donor.lastDonationDate || '';
+      if (lastDon && lastDon !== 'Never Donated') {
+        const lastDonTime = new Date(`${lastDon}T00:00:00Z`).getTime();
+        if (!Number.isNaN(lastDonTime)) {
+          const daysSinceDonation = (now - lastDonTime) / (1000 * 60 * 60 * 24);
+          if (daysSinceDonation >= 0 && daysSinceDonation < 90) {
+            continue; // Skip donor on active 90-day cooldown
+          }
+        }
+      }
+
       // Deduplicate so a donor is never alerted multiple times for the same request
       if (donorDigits && seenPhones.has(donorDigits)) continue;
       if (seenDonorIds.has(donorId)) continue;

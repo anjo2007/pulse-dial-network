@@ -1,6 +1,10 @@
 package com.pulsedial.donor
 
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -12,7 +16,93 @@ import com.facebook.react.bridge.ReactMethod
 class OverlayPermissionModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
+    private var mediaPlayer: MediaPlayer? = null
+
     override fun getName(): String = "OverlayPermission"
+
+    override fun onCatalystInstanceDestroy() {
+        super.onCatalystInstanceDestroy()
+        stopSoundInternal()
+    }
+
+    private fun stopSoundInternal() {
+        try {
+            mediaPlayer?.let { player ->
+                if (player.isPlaying) {
+                    player.stop()
+                }
+                player.reset()
+                player.release()
+            }
+        } catch (_: Exception) {
+        } finally {
+            mediaPlayer = null
+        }
+    }
+
+    @ReactMethod
+    fun playEmergencyAlertSound(promise: Promise) {
+        try {
+            stopSoundInternal()
+
+            val rawResId = reactContext.resources.getIdentifier(
+                "emergency_siren",
+                "raw",
+                reactContext.packageName
+            )
+
+            val player = if (rawResId != 0) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    val audioAttrs = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    MediaPlayer.create(reactContext, rawResId, audioAttrs, 0)
+                } else {
+                    MediaPlayer.create(reactContext, rawResId)
+                }
+            } else {
+                val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                MediaPlayer.create(reactContext, alarmUri)
+            }
+
+            if (player != null) {
+                player.isLooping = true
+                player.setVolume(1.0f, 1.0f)
+                player.start()
+                mediaPlayer = player
+                promise.resolve(true)
+            } else {
+                promise.resolve(false)
+            }
+        } catch (e: Exception) {
+            try {
+                val fallbackUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val fallbackPlayer = MediaPlayer.create(reactContext, fallbackUri)
+                if (fallbackPlayer != null) {
+                    fallbackPlayer.isLooping = true
+                    fallbackPlayer.setVolume(1.0f, 1.0f)
+                    fallbackPlayer.start()
+                    mediaPlayer = fallbackPlayer
+                    promise.resolve(true)
+                    return
+                }
+            } catch (_: Exception) {}
+            promise.resolve(false)
+        }
+    }
+
+    @ReactMethod
+    fun stopEmergencyAlertSound(promise: Promise) {
+        try {
+            stopSoundInternal()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.resolve(false)
+        }
+    }
 
     @ReactMethod
     fun canDrawOverlays(promise: Promise) {

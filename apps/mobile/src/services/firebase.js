@@ -156,9 +156,15 @@ export async function updateDonorProfile(donorId, updates) {
   const ref = doc(db, 'donors', donorId);
   const data = {};
   if (updates.fullName !== undefined) data.full_name = updates.fullName;
+  if (updates.phone !== undefined) {
+    data.phone = updates.phone;
+    data.phone_digits = normalizePhoneDigits(updates.phone);
+  }
   if (updates.bloodType !== undefined) data.blood_type = updates.bloodType;
   if (updates.weightKg !== undefined) data.weight_kg = Number(updates.weightKg);
   if (updates.age !== undefined) data.age = Number(updates.age);
+  if (updates.dateOfBirth !== undefined) data.date_of_birth = updates.dateOfBirth;
+  if (updates.sex !== undefined) data.sex = updates.sex;
   if (updates.medications !== undefined) data.medications = updates.medications;
   if (updates.diseases !== undefined) data.diseases = updates.diseases;
   if (updates.lastDonationDate !== undefined) data.last_donation_date = updates.lastDonationDate;
