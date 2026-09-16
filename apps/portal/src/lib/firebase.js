@@ -159,17 +159,35 @@ export const COMPATIBLE_DONORS = {
   'AB+': ['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'],
 };
 
+export function haversineKm(lat1, lon1, lat2, lon2) {
+  if (!Number.isFinite(lat1) || !Number.isFinite(lon1) || !Number.isFinite(lat2) || !Number.isFinite(lon2)) {
+    return 1.2;
+  }
+  const R = 6371; // Earth's radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c * 10) / 10;
+}
+
 /**
  * Create a new emergency request directly in Firestore.
  */
 export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeeded, urgency = 'CRITICAL' }) {
   const now = Date.now();
   const id = 'req_' + now + '_' + Math.random().toString(36).substring(2, 7);
+  const reqBlood = String(bloodType || '').replace(/\s+/g, '').toUpperCase();
+  const hospitalLat = Number(hospital.latitude || 10.5276);
+  const hospitalLon = Number(hospital.longitude || 76.2144);
+
   const data = {
     id,
     hospital_id: hospital.id,
     hospital_name: hospital.name,
-    blood_type: bloodType,
+    blood_type: reqBlood,
     units_required: Number(unitsNeeded) || 1,
     units_collected: 0,
     urgency,
@@ -177,8 +195,8 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
     current_tier: 1,
     current_radius_km: 1.0,
     current_wave_radius_meters: 1000,
-    lat: Number(hospital.latitude || 10.5276),
-    lon: Number(hospital.longitude || 76.2144),
+    lat: hospitalLat,
+    lon: hospitalLon,
     status: 'ACTIVE',
     patient_id: 'EMERGENCY-TRAUMA',
     created_at: new Date(now).toISOString(),
@@ -192,14 +210,13 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
     const donorsRef = collection(db, 'donors');
     const donorsSnap = await getDocs(donorsRef);
     let matched = 0;
-    const reqBlood = String(bloodType || '').trim().toUpperCase();
     const seenPhones = new Set();
     const seenDonorIds = new Set();
 
     for (const donorDoc of donorsSnap.docs) {
       const donor = donorDoc.data();
       const donorId = donorDoc.id;
-      const dBlood = String(donor.blood_type || donor.bloodType || '').trim().toUpperCase();
+      const dBlood = String(donor.blood_type || donor.bloodType || '').replace(/\s+/g, '').toUpperCase();
 
       // 1. Strict blood group matching: only alert donors with the exact same blood group!
       if (!dBlood || dBlood !== reqBlood) continue;
@@ -251,6 +268,10 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
       if (donorDigits) seenPhones.add(donorDigits);
       seenDonorIds.add(donorId);
 
+      const dLat = Number(donor.lat ?? donor.latitude);
+      const dLon = Number(donor.lon ?? donor.longitude);
+      const distKm = haversineKm(hospitalLat, hospitalLon, dLat, dLon);
+
       const asgnId = 'asgn_' + id + '_' + donorId;
       const arrivalOtp = String(Math.floor(100000 + Math.random() * 900000));
       const asgnData = {
@@ -261,15 +282,15 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
         donor_phone: donorPhone,
         donor_phone_digits: donorDigits,
         blood_type: dBlood,
-        distance_km: Number(donor.distance_km || 1.2),
-        distance_meters: 1200,
+        distance_km: distKm,
+        distance_meters: Math.round(distKm * 1000),
         status: 'PINGED',
         priority_score: 0.95,
         arrival_otp: arrivalOtp,
         qr_token: 'QR_' + now + '_' + donorId.substring(0, 5),
         hospital_name: hospital.name || 'Emergency Medical Centre',
         hospital_id: hospital.id,
-        request_blood_type: bloodType,
+        request_blood_type: reqBlood,
         units_required: Number(unitsNeeded) || 1,
         urgency,
         created_at: new Date(now).toISOString()
@@ -300,6 +321,23 @@ export async function closeEmergencyRequestDoc(requestId) {
     status: nextStatus,
     closed_at: new Date().toISOString()
   });
+
+  // Automatically withdraw any remaining pending (PINGED) assignments for this request
+  try {
+    const asgnsRef = collection(db, 'dispatch_assignments');
+    const q = query(asgnsRef, where('request_id', '==', requestId));
+    const asgnsSnap = await getDocs(q);
+    for (const aDoc of asgnsSnap.docs) {
+      if (aDoc.data().status === 'PINGED') {
+        await updateDoc(doc(db, 'dispatch_assignments', aDoc.id), {
+          status: 'WITHDRAWN',
+          withdrawn_at: new Date().toISOString()
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Error withdrawing assignments on close:', err);
+  }
 
   return {
     id: requestId,
@@ -357,6 +395,23 @@ export async function cancelEmergencyRequestDoc(requestId) {
     status: 'CANCELLED',
     cancelled_at: new Date().toISOString()
   });
+
+  // Automatically withdraw any remaining pending (PINGED) assignments for this request
+  try {
+    const asgnsRef = collection(db, 'dispatch_assignments');
+    const q = query(asgnsRef, where('request_id', '==', requestId));
+    const asgnsSnap = await getDocs(q);
+    for (const aDoc of asgnsSnap.docs) {
+      if (aDoc.data().status === 'PINGED') {
+        await updateDoc(doc(db, 'dispatch_assignments', aDoc.id), {
+          status: 'WITHDRAWN',
+          withdrawn_at: new Date().toISOString()
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Error withdrawing assignments on cancel:', err);
+  }
 
   return {
     id: requestId,

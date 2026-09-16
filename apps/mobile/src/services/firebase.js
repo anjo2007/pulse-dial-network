@@ -108,6 +108,8 @@ export async function signInOrCreateDonor({
       diseases,
       last_donation_date: lastDonationDate,
       is_available: true,
+      consent_accepted: true,
+      consentAccepted: true,
       reliability_score: 100,
       lat: location?.latitude ? Number(location.latitude) : 10.528,
       lon: location?.longitude ? Number(location.longitude) : 76.215,
@@ -141,6 +143,8 @@ export async function signInOrCreateDonor({
       diseases: donorData.diseases || diseases,
       lastDonationDate: donorData.last_donation_date || lastDonationDate,
       isAvailable: donorData.is_available ?? true,
+      consentAccepted: true,
+      consent_accepted: true,
       reliabilityScore: donorData.reliability_score || 100,
       latitude: donorData.lat,
       longitude: donorData.lon,
@@ -169,6 +173,10 @@ export async function updateDonorProfile(donorId, updates) {
   if (updates.diseases !== undefined) data.diseases = updates.diseases;
   if (updates.lastDonationDate !== undefined) data.last_donation_date = updates.lastDonationDate;
   if (updates.isAvailable !== undefined) data.is_available = Boolean(updates.isAvailable);
+  if (updates.consentAccepted !== undefined) {
+    data.consent_accepted = Boolean(updates.consentAccepted);
+    data.consentAccepted = Boolean(updates.consentAccepted);
+  }
   if (updates.latitude !== undefined) data.lat = Number(updates.latitude);
   if (updates.longitude !== undefined) data.lon = Number(updates.longitude);
 
@@ -218,9 +226,14 @@ export function subscribeDonorAssignments(donorOrId, onAssignments) {
           (donorDigits && asgnPhoneDigits && asgnPhoneDigits === donorDigits);
 
         if (isMatch) {
+          // Ignore cancelled, withdrawn, or declined assignments
+          if (['DECLINED', 'WITHDRAWN', 'CANCELLED', 'CLOSED'].includes(item.status)) {
+            return;
+          }
+
           // Strictly verify same blood group match: do NOT alert if blood group differs!
-          const reqBlood = String(item.request_blood_type || item.blood_type || '').trim().toUpperCase();
-          const myBlood = String(donorBlood || '').trim().toUpperCase();
+          const reqBlood = String(item.request_blood_type || item.blood_type || '').replace(/\s+/g, '').toUpperCase();
+          const myBlood = String(donorBlood || '').replace(/\s+/g, '').toUpperCase();
           if (myBlood && reqBlood && myBlood !== reqBlood) {
             return;
           }

@@ -91,10 +91,10 @@ export function isDonorEligibleForAlert(donor, alertItem) {
   if (Number.isFinite(weight) && weight < 50) return false;
   const age = Number(donor.age);
   if (Number.isFinite(age) && (age < 18 || age > 65)) return false;
-  if (donor.eligible === false) return false;
+  if (donor.consentAccepted === false || donor.consent_accepted === false) return false;
   if (alertItem) {
-    const reqBlood = String(alertItem.request?.bloodType || alertItem.request_blood_type || alertItem.blood_type || alertItem.bloodType || '').trim().toUpperCase();
-    const myBlood = String(donor.bloodType || donor.blood_type || '').trim().toUpperCase();
+    const reqBlood = String(alertItem.request?.bloodType || alertItem.request_blood_type || alertItem.blood_type || alertItem.bloodType || '').replace(/\s+/g, '').toUpperCase();
+    const myBlood = String(donor.bloodType || donor.blood_type || '').replace(/\s+/g, '').toUpperCase();
     if (reqBlood && myBlood && reqBlood !== myBlood) return false;
   }
   return true;
@@ -1303,7 +1303,25 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
           const snap = await getDoc(doc(db, 'donors', donor.id));
           if (snap.exists()) {
             const data = snap.data();
-            setDonor((prev) => ({ ...prev, ...data, fullName: data.full_name || prev.fullName }));
+            setDonor((prev) => {
+              const merged = {
+                ...prev,
+                ...data,
+                id: donor.id,
+                fullName: data.full_name || prev?.fullName || prev?.name || 'Volunteer Donor',
+                bloodType: data.blood_type || prev?.bloodType || 'O-',
+                weightKg: Number(data.weight_kg ?? prev?.weightKg ?? 68),
+                age: Number(data.age ?? prev?.age ?? 26),
+                dateOfBirth: data.date_of_birth || prev?.dateOfBirth || '1998-05-12',
+                lastDonationDate: data.last_donation_date || prev?.lastDonationDate || 'Never Donated',
+                isAvailable: data.is_available ?? prev?.isAvailable ?? true,
+                consentAccepted: data.consent_accepted ?? prev?.consentAccepted ?? true,
+                reliabilityScore: data.reliability_score || prev?.reliabilityScore || 100,
+                latitude: data.lat ?? prev?.latitude,
+                longitude: data.lon ?? prev?.longitude,
+              };
+              return donorView(merged);
+            });
           }
         }
         return;
@@ -1334,7 +1352,7 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
     return () => {
       unsubscribe?.();
     };
-  }, [donor?.id, donor?.phone]);
+  }, [donor?.id, donor?.phone, donor?.bloodType, donor?.blood_type, donor?.isAvailable]);
 
   // Real-time high-accuracy GPS tracking when responding or en-route to an emergency
   useEffect(() => {
