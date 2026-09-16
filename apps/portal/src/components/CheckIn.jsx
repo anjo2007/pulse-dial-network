@@ -35,7 +35,7 @@ export default function CheckIn({ onCheckIn, disabled = false, disabledReason = 
       return;
     }
     if (submittedRef.current.has(result.value)) {
-      setError('That arrival token was already verified in this session. Ask the donor to show a fresh token.');
+      setError('That arrival OTP or token was already verified in this session. Ask the donor to show a fresh OTP.');
       return;
     }
     setError('');
@@ -76,14 +76,14 @@ export default function CheckIn({ onCheckIn, disabled = false, disabledReason = 
   return (
     <form className="panel checkin" onSubmit={submit} noValidate aria-busy={submitting || undefined}>
       <h2>Fast donor check-in</h2>
-      <p>Scan or paste the arrival token displayed in the donor app.</p>
-      <Field id={`${baseId}-token`} label="Arrival token" error={error} hint="Format: PULSE:assignment-id:code">
+      <p>Enter the 6-digit Arrival OTP or scan the arrival token displayed on the donor's phone.</p>
+      <Field id={`${baseId}-token`} label="Arrival token / OTP" error={error} hint="Enter 6-digit Arrival OTP (e.g. 482915) or PULSE:assignment-id:code">
         {(controlProps) => (
           <input
             {...controlProps}
             ref={inputRef}
             value={value}
-            placeholder="PULSE:assignment-id:token"
+            placeholder="e.g. 482915 (or PULSE:assignment-id:token)"
             autoComplete="off"
             spellCheck={false}
             disabled={submitting || disabled}

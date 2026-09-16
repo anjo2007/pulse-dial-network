@@ -147,7 +147,7 @@ test('a closed request offers no dispatch actions', () => {
 test('the check-in form is labelled and cannot submit while empty', () => {
   const markup = render(React.createElement(CheckIn, { onCheckIn: async () => ({}) }));
   assert.match(markup, /Arrival token/);
-  assert.match(markup, /placeholder="PULSE:assignment-id:token"/);
+  assert.match(markup, /placeholder="e\.g\. 482915 \(or PULSE:assignment-id:token\)"/);
   assert.match(markup, /aria-describedby="[^"]*-hint"/);
   assert.match(markup, /type="submit"[^>]*disabled/);
   assert.match(markup, /Fast donor check-in/);

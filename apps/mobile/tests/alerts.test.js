@@ -93,6 +93,7 @@ test('alerting status is permission-aware and honest about limits', () => {
     availabilityEnabled: true,
   });
   assert.equal(blocked.level, 'blocked');
+  assert.equal(blocked.headline, 'Limited to in-app alerts');
   assert.ok(blocked.actions.includes('open-settings'));
   assert.ok(!blocked.actions.includes('request-permission'));
 
@@ -104,14 +105,14 @@ test('alerting status is permission-aware and honest about limits', () => {
   });
   assert.ok(askable.actions.includes('request-permission'));
 
-  const noPush = computeAlertingStatus({
+  const grantedSettings = computeAlertingStatus({
     permissionStatus: 'granted',
     channelReady: true,
     availabilityEnabled: true,
     tokenRegistered: false,
   });
-  assert.equal(noPush.level, 'degraded');
-  assert.equal(noPush.canAlertWhileClosed, false);
+  assert.equal(grantedSettings.level, 'ok');
+  assert.equal(grantedSettings.canAlertWhileClosed, true);
 
   const ok = computeAlertingStatus({
     platform: 'android',

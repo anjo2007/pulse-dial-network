@@ -625,13 +625,6 @@ function SignIn({ onSignedIn }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  function fillPreset(pPhone, pName, pBlood) {
-    setPhone(pPhone);
-    setName(pName);
-    setBloodType(pBlood);
-    setError('');
-  }
-
   async function submit() {
     const cleanPhone = phone.trim();
     if (!cleanPhone || cleanPhone.length < 6) {
@@ -687,28 +680,6 @@ function SignIn({ onSignedIn }) {
           <Text style={styles.formSub}>
             Direct Firebase authentication without SMS OTP delay. Enter your details to start.
           </Text>
-
-          <Text style={styles.label}>Quick donor profiles</Text>
-          <View style={[styles.typeRow, { marginBottom: 16 }]}>
-            <Pressable
-              style={styles.typeChip}
-              onPress={() => fillPreset('+91-9900000001', 'Arjun Menon', 'O-')}
-            >
-              <Text style={styles.typeText}>Arjun (O-)</Text>
-            </Pressable>
-            <Pressable
-              style={styles.typeChip}
-              onPress={() => fillPreset('+91-9988776655', 'Dr. Preethi Nair', 'O+')}
-            >
-              <Text style={styles.typeText}>Preethi (O+)</Text>
-            </Pressable>
-            <Pressable
-              style={styles.typeChip}
-              onPress={() => fillPreset('+91-8714743183', 'Anjo M J', 'O-')}
-            >
-              <Text style={styles.typeText}>Anjo (O-)</Text>
-            </Pressable>
-          </View>
 
           <Text style={styles.label}>Mobile number *</Text>
           <TextInput
@@ -815,12 +786,11 @@ function SignIn({ onSignedIn }) {
 }
 
 function AlertStatusCard({ status, busy, onAction }) {
+  if (status.level === 'ok') return null;
   const tone =
-    status.level === 'ok'
-      ? styles.statusOk
-      : status.level === 'blocked'
-        ? styles.statusBlocked
-        : styles.statusWarn;
+    status.level === 'blocked'
+      ? styles.statusBlocked
+      : styles.statusWarn;
   return (
     <View style={[styles.statusCard, tone]}>
       <Text style={styles.statusTitle}>{status.headline}</Text>

@@ -685,10 +685,14 @@ export function createApi(options = {}) {
 
   app.post('/hospital/checkin', auth('hospital'), async (req, res) => {
     const token = String(req.body?.token || '').trim();
-    if (token.length < 8 || token.length > 256) return res.status(400).json({ error: 'Provide the arrival token shown in the donor app.' });
+    if (token.length < 6 || token.length > 256) return res.status(400).json({ error: 'Provide the arrival token shown in the donor app.' });
     const now = clock();
     const result = await store.mutate(state => {
-      const assignment = state.assignments.find(item => item.checkinToken && item.checkinToken === token);
+      const assignment = state.assignments.find(item =>
+        (item.checkinToken && item.checkinToken === token) ||
+        (item.arrivalOtp && item.arrivalOtp === token) ||
+        (token.length === 6 && item.checkinToken && item.checkinToken.replace(/\D/g, '').slice(-6) === token)
+      );
       if (!assignment) return { status: 404, error: 'Arrival token was not found.' };
       const request = state.requests.find(item => item.id === assignment.requestId);
       if (!request) return { status: 404, error: 'Arrival token was not found.' };
@@ -773,6 +777,7 @@ export function createApi(options = {}) {
       if (response === 'ACCEPT') {
         assignment.status = 'ACCEPTED';
         assignment.checkinToken = checkinTokenFor(assignment, randomUUID);
+        assignment.arrivalOtp = String(Math.floor(100000 + Math.random() * 900000));
       } else {
         assignment.status = 'DECLINED';
         cancelOutboxForAssignment(state, assignment.id, 'The donor declined this alert.', now);

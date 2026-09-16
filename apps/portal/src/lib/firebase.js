@@ -347,48 +347,95 @@ export async function cancelEmergencyRequestDoc(requestId) {
 }
 
 /**
- * Check-in donor at hospital desk using OTP or QR token
+ * Check-in donor at hospital desk using 6-digit OTP or QR token
  */
 export async function checkInDonorDesk({ token, arrivalOtp }) {
   const asgnsRef = collection(db, 'dispatch_assignments');
   const snap = await getDocs(asgnsRef);
   let found = null;
-  const cleanOtp = String(arrivalOtp || '').trim();
-  const cleanToken = String(token || '').trim();
+  const cleanOtp = String(arrivalOtp || token || '').trim();
+  const cleanToken = String(token || arrivalOtp || '').trim();
 
   for (const d of snap.docs) {
     const data = d.data();
-    if ((cleanOtp && String(data.arrival_otp || '').trim() === cleanOtp) ||
-        (cleanToken && String(data.qr_token || '').trim() === cleanToken)) {
+    const itemOtp = String(data.arrival_otp || '').trim();
+    const itemQr = String(data.qr_token || data.checkinToken || '').trim();
+    const itemId = String(d.id || '').trim();
+
+    if (
+      (cleanOtp && itemOtp === cleanOtp) ||
+      (cleanToken && itemQr === cleanToken) ||
+      (cleanToken && itemId === cleanToken) ||
+      (cleanToken && cleanToken.length === 6 && itemQr.replace(/\D/g, '').slice(-6) === cleanToken) ||
+      (cleanOtp && cleanOtp.length === 6 && itemId.replace(/\D/g, '').slice(-6) === cleanOtp)
+    ) {
       found = { id: d.id, ...data };
       break;
     }
   }
 
   if (!found) {
-    throw new Error('Check-in pass or OTP not found in active dispatch assignments.');
+    throw new Error('Arrival OTP or token not found in active dispatch assignments.');
   }
 
-  await updateDoc(doc(db, 'dispatch_assignments', found.id), {
-    status: 'COMPLETED',
-    verified_at: new Date().toISOString()
-  });
+  const already = found.status === 'COMPLETED';
+
+  if (!already) {
+    await updateDoc(doc(db, 'dispatch_assignments', found.id), {
+      status: 'COMPLETED',
+      verified_at: new Date().toISOString()
+    });
+  }
+
+  let unitsCollected = 1;
+  let unitsRequired = Number(found.units_required) || 1;
+  let bloodType = found.request_blood_type || found.blood_type || 'O-';
 
   try {
     const reqRef = doc(db, 'emergency_requests', found.request_id);
     const reqSnap = await getDoc(reqRef);
     if (reqSnap.exists()) {
-      const current = reqSnap.data().units_collected || 0;
-      const needed = reqSnap.data().units_required || 1;
-      const nextUnits = current + 1;
-      await updateDoc(reqRef, {
-        units_collected: nextUnits,
-        status: nextUnits >= needed ? 'FULFILLED' : 'ACTIVE'
-      });
+      const rData = reqSnap.data();
+      const current = Number(rData.units_collected) || 0;
+      const needed = Number(rData.units_required) || 1;
+      unitsRequired = needed;
+      bloodType = rData.blood_type || bloodType;
+      if (!already) {
+        unitsCollected = current + 1;
+        await updateDoc(reqRef, {
+          units_collected: unitsCollected,
+          status: unitsCollected >= needed ? 'FULFILLED' : 'ACTIVE'
+        });
+      } else {
+        unitsCollected = current;
+      }
     }
   } catch (err) {
     console.warn('Increment units error:', err);
   }
 
-  return { ok: true, donorName: found.donor_name, bloodType: found.blood_type };
+  const assignment = {
+    id: found.id,
+    donorId: found.donor_id || '',
+    donorName: found.donor_name || 'Volunteer Donor',
+    donorBloodType: found.blood_type || bloodType,
+    status: 'COMPLETED',
+    completedAt: found.verified_at || new Date().toISOString()
+  };
+
+  const request = {
+    id: found.request_id,
+    bloodType,
+    unitsNeeded: unitsRequired,
+    fulfilledUnits: unitsCollected
+  };
+
+  return {
+    ok: true,
+    alreadyCompleted: already,
+    donorName: found.donor_name || 'Volunteer Donor',
+    bloodType: found.blood_type || bloodType,
+    assignment,
+    request
+  };
 }

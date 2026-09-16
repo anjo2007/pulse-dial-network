@@ -52,13 +52,19 @@ export function validateNewRequest({ bloodType, unitsNeeded, urgency } = {}) {
 
 export function validateCheckinToken(input) {
   const value = String(input ?? '').replace(/[\s\u200B]+/g, '').trim();
-  if (!value) return { valid: false, value, errors: { token: 'Scan or paste the arrival token shown in the donor app.' } };
+  if (!value) return { valid: false, value, errors: { token: 'Enter the 6-digit Arrival OTP or token shown in the donor app.' } };
+
+  // Accept 6-digit numeric arrival OTP shown on donor phone
+  if (/^\d{6}$/.test(value)) {
+    return { valid: true, value, errors: {} };
+  }
+
   const match = CHECKIN_PATTERN.exec(value);
   if (!match) {
     return {
       valid: false,
       value,
-      errors: { token: 'That does not look like an arrival token. Expected format: PULSE:<assignment-id>:<code>.' },
+      errors: { token: 'Enter the 6-digit arrival OTP (e.g. 482915) or token format PULSE:<assignment-id>:<code>.' },
     };
   }
   return { valid: true, value: `PULSE:${match[1]}:${match[2]}`, errors: {} };

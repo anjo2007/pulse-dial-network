@@ -175,10 +175,9 @@ export function computeAlertingStatus(input = {}) {
     actions.push('enable-availability');
   } else if (permissionStatus !== 'granted') {
     level = 'blocked';
-    headline = 'Notifications are off';
+    headline = 'Limited to in-app alerts';
     detail =
-      'The system is blocking notifications, so alerts cannot appear above other apps. '
-      + 'You will only see requests while the app is open.';
+      'Notifications are disabled in system settings. Pulse Dial can only alert you while the app is open. Open settings to enable notifications.';
     if (canAskAgain) actions.push('request-permission');
     actions.push('open-settings');
   } else if (!channelReady) {
@@ -186,13 +185,6 @@ export function computeAlertingStatus(input = {}) {
     headline = 'Alert channel not ready';
     detail = 'The high-importance alert channel is missing. Reopen the app or reinstall from the latest build.';
     actions.push('retry-channel');
-  } else if (tokenRegistered === false || !pushAvailable) {
-    level = 'degraded';
-    headline = 'Limited to in-app alerts';
-    detail =
-      'This build has no push credentials, so closed-app alerts cannot be delivered. '
-      + 'Requests still appear in the app while it is open.';
-    actions.push('open-settings');
   }
 
   return {

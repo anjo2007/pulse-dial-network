@@ -73,6 +73,16 @@ test('arrival token validation', async (t) => {
     assert.equal(hyphenated.value, 'PULSE:974fb716-a926-4750-b81e-34b5de7c1932:6574b10f-815');
   });
 
+  await t.test('accepts a 6-digit numeric Arrival OTP from donor mobile app', () => {
+    const otp = validateCheckinToken(' 482915 \n');
+    assert.equal(otp.valid, true);
+    assert.equal(otp.value, '482915');
+
+    const another = validateCheckinToken('012345');
+    assert.equal(another.valid, true);
+    assert.equal(another.value, '012345');
+  });
+
   await t.test('rejects empty, truncated and unrelated text with a format hint', () => {
     for (const input of ['', '   ', 'PULSE:', 'PULSE:abc', 'https://example.com']) {
       const result = validateCheckinToken(input);
