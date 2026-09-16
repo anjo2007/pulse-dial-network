@@ -4,7 +4,9 @@ import {
   Alert,
   Animated,
   AppState,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -75,6 +77,27 @@ export function getDaysRemainingInCooldown(dateStr) {
     return Math.ceil(90 - days);
   }
   return 0;
+}
+
+/**
+ * Returns true only if the donor satisfies all eligibility criteria (availability, 90-day cooldown,
+ * weight >= 50kg, age 18-65, medical eligibility, and exact matching blood group).
+ */
+export function isDonorEligibleForAlert(donor, alertItem) {
+  if (!donor) return false;
+  if (donor.isAvailable === false || donor.is_available === false) return false;
+  if (hasDonatedInLast90Days(donor.lastDonationDate || donor.last_donation_date)) return false;
+  const weight = Number(donor.weightKg ?? donor.weight_kg ?? donor.weight);
+  if (Number.isFinite(weight) && weight < 50) return false;
+  const age = Number(donor.age);
+  if (Number.isFinite(age) && (age < 18 || age > 65)) return false;
+  if (donor.eligible === false) return false;
+  if (alertItem) {
+    const reqBlood = String(alertItem.request?.bloodType || alertItem.request_blood_type || alertItem.blood_type || alertItem.bloodType || '').trim().toUpperCase();
+    const myBlood = String(donor.bloodType || donor.blood_type || '').trim().toUpperCase();
+    if (reqBlood && myBlood && reqBlood !== myBlood) return false;
+  }
+  return true;
 }
 
 // The session token is kept in memory for the device-registration callback; persistence
@@ -392,11 +415,19 @@ function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={styles.safe}>
         <ExpoStatusBar style="dark" />
-        <ScrollView contentContainerStyle={styles.editProfileContainer}>
-          <View style={styles.editHeader}>
-            <Text style={styles.editTitle}>✏️ Edit Donor Profile</Text>
-            <Text style={styles.editSub}>All details are editable and synchronize in real-time</Text>
-          </View>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.editProfileContainer}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.editHeader}>
+              <Text style={styles.editTitle}>✏️ Edit Donor Profile</Text>
+              <Text style={styles.editSub}>All details are editable and synchronize in real-time</Text>
+            </View>
 
           {/* Full Legal Name */}
           <Text style={styles.label}>Full Legal Name</Text>
@@ -552,19 +583,20 @@ function EditProfileModal({ visible, donor, onClose, onSave, onSaved }) {
               thumbColor={isAvailable ? '#e93f4e' : '#fff'}
             />
           </View>
-
-          {/* Action Buttons */}
-          <View style={{ marginTop: 20, gap: 10 }}>
-            <Button
-              title={saving ? 'Saving...' : 'Save Profile Changes'}
-              onPress={handleSave}
-              disabled={saving}
-            />
-            <Button title="Cancel" variant="plain" onPress={onClose} disabled={saving} />
-          </View>
         </ScrollView>
-      </SafeAreaView>
-    </Modal>
+
+        {/* Docked Action Footer - Always visible and accessible */}
+        <View style={styles.editFooter}>
+          <Button
+            title={saving ? 'Saving...' : 'Save Profile Changes'}
+            onPress={handleSave}
+            disabled={saving}
+          />
+          <Button title="Cancel" variant="plain" onPress={onClose} disabled={saving} />
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  </Modal>
   );
 }
 
@@ -1420,34 +1452,34 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
 
   // When a pending dispatch arrives, automatically launch the incoming emergency call alert and bring app to front
   useEffect(() => {
-    // If user donated blood in last 90 days, do not give them alert msg!
-    if (hasDonatedInLast90Days(donor?.lastDonationDate)) {
-      return;
-    }
+    if (!isDonorEligibleForAlert(donor)) return;
+
     const pendingAlert = alerts.find(
-      (item) => item.status === 'PINGED' && !dismissedAlertIds.has(item.id) && !dismissedAlertIds.has(item.requestId)
+      (item) =>
+        item.status === 'PINGED' &&
+        !dismissedAlertIds.has(item.id) &&
+        !dismissedAlertIds.has(item.requestId) &&
+        isDonorEligibleForAlert(donor, item)
     );
     if (pendingAlert && !screening && !incomingCallAlert) {
       setIncomingCallAlert(pendingAlert);
       OverlayService.bringAppToForeground().catch(() => {});
     }
-  }, [alerts, dismissedAlertIds, screening, incomingCallAlert, donor?.lastDonationDate]);
+  }, [alerts, dismissedAlertIds, screening, incomingCallAlert, donor]);
 
   // Route the donor to the alert the notification referred to (foreground + cold start).
   useEffect(() => {
     if (!route?.assignmentId) return;
-    if (hasDonatedInLast90Days(donor?.lastDonationDate)) {
+    if (!isDonorEligibleForAlert(donor)) {
       onRouteHandled?.();
       return;
     }
     const match = alerts.find((item) => item.id === route.assignmentId);
-    if (match) {
-      if (match.status === 'PINGED') {
-        setIncomingCallAlert(match);
-      }
-      onRouteHandled?.();
+    if (match && match.status === 'PINGED' && isDonorEligibleForAlert(donor, match)) {
+      setIncomingCallAlert(match);
     }
-  }, [route, alerts, onRouteHandled, donor?.lastDonationDate]);
+    onRouteHandled?.();
+  }, [route, alerts, onRouteHandled, donor]);
 
   function handleAcceptCall(item) {
     setIncomingCallAlert(null);
@@ -1532,7 +1564,9 @@ function Home({ session, signOut, route, onRouteHandled, receiveNonce }) {
 
   const isCooldownActive = hasDonatedInLast90Days(donor?.lastDonationDate);
   const cooldownDaysRemaining = getDaysRemainingInCooldown(donor?.lastDonationDate);
-  const pending = isCooldownActive ? null : alerts.find((item) => item.status === 'PINGED');
+  const pending = !isDonorEligibleForAlert(donor)
+    ? null
+    : alerts.find((item) => item.status === 'PINGED' && isDonorEligibleForAlert(donor, item));
   const active = alerts.find((item) => ['ACCEPTED', 'ARRIVED'].includes(item.status));
 
   if (screening) {
@@ -2036,11 +2070,24 @@ const styles = StyleSheet.create({
   pickerCancel: { backgroundColor: '#f0f4f8' },
   pickerCancelText: { color: '#4a5b6d', fontWeight: '700', fontSize: 14 },
   pickerApply: { backgroundColor: '#e93f4e' },
-  pickerApplyText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  editProfileContainer: { padding: 20, paddingBottom: 40 },
+  editProfileContainer: { padding: 20, paddingBottom: 24 },
   editHeader: { marginBottom: 20 },
   editTitle: { fontSize: 22, fontWeight: '800', color: '#0e2433' },
   editSub: { fontSize: 13, color: '#687d91', marginTop: 4 },
+  editFooter: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 16 : 14,
+    backgroundColor: '#ffffff',
+    borderTopWidth: 1,
+    borderTopColor: '#e2ecf5',
+    gap: 8,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+  },
   availabilityRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 14, borderRadius: 10, borderWidth: 1, borderColor: '#e1e8ef' },
   availabilityTitle: { fontSize: 15, fontWeight: '700', color: '#0e2433' },
   availabilitySub: { fontSize: 12, color: '#687d91', marginTop: 2 },

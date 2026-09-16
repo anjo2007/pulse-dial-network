@@ -196,8 +196,9 @@ export async function updateDonorLocation(donorId, lat, lon) {
  * Robustly matches by donor ID or normalized phone digits.
  */
 export function subscribeDonorAssignments(donorOrId, onAssignments) {
-  const donorId = typeof donorOrId === 'string' ? donorOrId : donorOrId?.id;
+  const donorId = typeof donorOrId === 'object' ? donorOrId?.id : donorOrId;
   const donorPhone = typeof donorOrId === 'object' ? donorOrId?.phone : '';
+  const donorBlood = typeof donorOrId === 'object' ? (donorOrId?.bloodType || donorOrId?.blood_type || '') : '';
   const donorDigits = normalizePhoneDigits(donorPhone);
 
   const asgnsRef = collection(db, 'dispatch_assignments');
@@ -217,6 +218,13 @@ export function subscribeDonorAssignments(donorOrId, onAssignments) {
           (donorDigits && asgnPhoneDigits && asgnPhoneDigits === donorDigits);
 
         if (isMatch) {
+          // Strictly verify same blood group match: do NOT alert if blood group differs!
+          const reqBlood = String(item.request_blood_type || item.blood_type || '').trim().toUpperCase();
+          const myBlood = String(donorBlood || '').trim().toUpperCase();
+          if (myBlood && reqBlood && myBlood !== reqBlood) {
+            return;
+          }
+
           // Deduplicate by request_id: never show duplicate alerts for the same emergency
           const reqKey = item.request_id || d.id;
           if (seenRequestIds.has(reqKey)) return;

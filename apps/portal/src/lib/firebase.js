@@ -192,21 +192,45 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
     const donorsRef = collection(db, 'donors');
     const donorsSnap = await getDocs(donorsRef);
     let matched = 0;
-    const compatibleList = COMPATIBLE_DONORS[bloodType] || [bloodType, 'O-'];
+    const reqBlood = String(bloodType || '').trim().toUpperCase();
     const seenPhones = new Set();
     const seenDonorIds = new Set();
 
     for (const donorDoc of donorsSnap.docs) {
       const donor = donorDoc.data();
       const donorId = donorDoc.id;
-      const dBlood = donor.blood_type || donor.bloodType || '';
+      const dBlood = String(donor.blood_type || donor.bloodType || '').trim().toUpperCase();
+
+      // 1. Strict blood group matching: only alert donors with the exact same blood group!
+      if (!dBlood || dBlood !== reqBlood) continue;
+
+      // 2. Availability: donor must be actively marked available
       const isAvail = donor.is_available ?? donor.isAvailable ?? true;
       if (!isAvail) continue;
 
-      const donorPhone = donor.phone || '';
-      const donorDigits = normalizePhoneDigits(donorPhone);
+      // 3. Consent check: donor must have accepted emergency alert matching consent
+      const hasConsent = donor.consent_accepted ?? donor.consentAccepted ?? true;
+      if (!hasConsent) continue;
 
-      // Check 90-day donation cooldown: if donor donated blood in last 90 days, do NOT alert them
+      // 4. Clinical Eligibility: donor must not be marked medically ineligible
+      if (donor.eligible === false) continue;
+
+      // 5. Weight Eligibility: whole blood donation requires minimum 50 kg
+      const weight = Number(donor.weight_kg ?? donor.weightKg ?? donor.weight);
+      if (Number.isFinite(weight) && weight < 50) continue;
+
+      // 6. Age Eligibility: donor must be between 18 and 65 years old
+      let age = Number(donor.age);
+      const dob = donor.date_of_birth || donor.dob || donor.birthDate;
+      if (!Number.isFinite(age) && dob) {
+        const dobTime = new Date(dob).getTime();
+        if (!Number.isNaN(dobTime)) {
+          age = Math.floor((now - dobTime) / (365.25 * 24 * 60 * 60 * 1000));
+        }
+      }
+      if (Number.isFinite(age) && (age < 18 || age > 65)) continue;
+
+      // 7. 90-day whole blood cooldown: if donor donated within last 90 days, do NOT alert them
       const lastDon = donor.last_donation_date || donor.lastDonationDate || '';
       if (lastDon && lastDon !== 'Never Donated') {
         const lastDonTime = new Date(`${lastDon}T00:00:00Z`).getTime();
@@ -218,40 +242,40 @@ export async function createEmergencyRequestDoc({ hospital, bloodType, unitsNeed
         }
       }
 
+      const donorPhone = donor.phone || '';
+      const donorDigits = normalizePhoneDigits(donorPhone);
+
       // Deduplicate so a donor is never alerted multiple times for the same request
       if (donorDigits && seenPhones.has(donorDigits)) continue;
       if (seenDonorIds.has(donorId)) continue;
+      if (donorDigits) seenPhones.add(donorDigits);
+      seenDonorIds.add(donorId);
 
-      if (compatibleList.includes(dBlood)) {
-        if (donorDigits) seenPhones.add(donorDigits);
-        seenDonorIds.add(donorId);
-
-        const asgnId = 'asgn_' + id + '_' + donorId;
-        const arrivalOtp = String(Math.floor(100000 + Math.random() * 900000));
-        const asgnData = {
-          id: asgnId,
-          request_id: id,
-          donor_id: donorId,
-          donor_name: donor.full_name || donor.name || 'Volunteer Donor',
-          donor_phone: donorPhone,
-          donor_phone_digits: donorDigits,
-          blood_type: dBlood,
-          distance_km: Number(donor.distance_km || 1.2),
-          distance_meters: 1200,
-          status: 'PINGED',
-          priority_score: 0.95,
-          arrival_otp: arrivalOtp,
-          qr_token: 'QR_' + now + '_' + donorId.substring(0, 5),
-          hospital_name: hospital.name || 'Emergency Medical Centre',
-          hospital_id: hospital.id,
-          request_blood_type: bloodType,
-          units_required: Number(unitsNeeded) || 1,
-          urgency,
-          created_at: new Date(now).toISOString()
-        };
-        await setDoc(doc(db, 'dispatch_assignments', asgnId), asgnData);
-        matched++;
-      }
+      const asgnId = 'asgn_' + id + '_' + donorId;
+      const arrivalOtp = String(Math.floor(100000 + Math.random() * 900000));
+      const asgnData = {
+        id: asgnId,
+        request_id: id,
+        donor_id: donorId,
+        donor_name: donor.full_name || donor.name || 'Volunteer Donor',
+        donor_phone: donorPhone,
+        donor_phone_digits: donorDigits,
+        blood_type: dBlood,
+        distance_km: Number(donor.distance_km || 1.2),
+        distance_meters: 1200,
+        status: 'PINGED',
+        priority_score: 0.95,
+        arrival_otp: arrivalOtp,
+        qr_token: 'QR_' + now + '_' + donorId.substring(0, 5),
+        hospital_name: hospital.name || 'Emergency Medical Centre',
+        hospital_id: hospital.id,
+        request_blood_type: bloodType,
+        units_required: Number(unitsNeeded) || 1,
+        urgency,
+        created_at: new Date(now).toISOString()
+      };
+      await setDoc(doc(db, 'dispatch_assignments', asgnId), asgnData);
+      matched++;
     }
   } catch (err) {
     console.warn('Auto-match donors error:', err);
